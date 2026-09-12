@@ -68,7 +68,13 @@ app.post("/webhook", async (req, res) => {
     if (req.body.object === "instagram") {
       for (const entry of req.body.entry || []) {
         for (const messagingEvent of entry.messaging || []) {
-          
+
+          // Ignore messages sent by our own Instagram account
+          if (messagingEvent.message?.is_echo) {
+            console.log("Ignoring own outgoing message.");
+            continue;
+          }
+
           // Only respond to incoming messages
           if (messagingEvent.message && messagingEvent.sender) {
             const senderId = messagingEvent.sender.id;
@@ -78,7 +84,7 @@ app.post("/webhook", async (req, res) => {
 
             await sendInstagramMessage(
               senderId,
-              "Hi! 👋 Thanks for messaging Beautyrocket. Your message was received successfully! 🚀"
+              "Hi! 👋 Thanks for reaching out! I got your message and will get back to you shortly. 😊"
             );
           }
         }
