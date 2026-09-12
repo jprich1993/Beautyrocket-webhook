@@ -1,14 +1,62 @@
 const express = require("express");
+const { Pool } = require("pg");
 
 const app = express();
 app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
+const DATABASE_URL = process.env.DATABASE_URL;
 
-// Keeps track of people who already received the automatic greeting.
-// Note: this resets if Render restarts/redeploys the service.
-const greetedUsers = new Set();
+// Connect to Render Postgres
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
+
+// Create the database table if it doesn't exist
+async function initializeDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS greeted_users (
+        instagram_user_id TEXT PRIMARY KEY,
+        greeted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    console.log("Database initialized successfully.");
+  } catch (error) {
+    console.error("Database initialization error:", error);
+  }
+}
+
+// Check whether this Instagram user has already received the greeting
+async function hasBeenGreeted(instagramUserId) {
+  const result = await pool.query(
+    `
+    SELECT instagram_user_id
+    FROM greeted_users
+    WHERE instagram_user_id = $1
+    `,
+    [instagramUserId]
+  );
+
+  return result.rows.length > 0;
+}
+
+// Remember that this Instagram user received the greeting
+async function markAsGreeted(instagramUserId) {
+  await pool.query(
+    `
+    INSERT INTO greeted_users (instagram_user_id)
+    VALUES ($1)
+    ON CONFLICT (instagram_user_id) DO NOTHING
+    `,
+    [instagramUserId]
+  );
+}
 
 const initialGreeting =
   "Hi! 👋💕 I’m glad you’re enjoying my content! Let’s be online friends. Feel free to follow me, ask me questions, or send me suggestions for what I should film next! 🎥✨";
@@ -37,7 +85,10 @@ async function sendInstagramMessage(recipientId, text) {
 
     const data = await response.json();
 
-    console.log("Instagram API response:", JSON.stringify(data, null, 2));
+    console.log(
+      "Instagram API response:",
+      JSON.stringify(data, null, 2)
+    );
 
     if (!response.ok) {
       console.error("Instagram API error:", data);
@@ -95,21 +146,27 @@ app.post("/webhook", async (req, res) => {
         }
 
         console.log(
-          `Incoming message from ${senderId}: ${messageText || "[non-text message]"}`
+          `Incoming message from ${senderId}: ${
+            messageText || "[non-text message]"
+          }`
         );
+
+        // Check the database
+        const alreadyGreeted = await hasBeenGreeted(senderId);
 
         // If this person already received the greeting,
         // Beautyrocket stays completely silent.
-        if (greetedUsers.has(senderId)) {
+        if (alreadyGreeted) {
           console.log(
-            `Conversation already greeted; waiting for Sheila.`
+            "Conversation already greeted; waiting for Sheila."
           );
           continue;
         }
 
-        // Mark this person as greeted BEFORE sending the message
-        // so the bot will not respond again.
-        greetedUsers.add(senderId);
+        // Save the user BEFORE sending the greeting.
+        // This prevents duplicate greetings if Meta sends
+        // the webhook more than once.
+        await markAsGreeted(senderId);
 
         console.log(
           `Sending initial greeting to ${senderId}.`
@@ -134,6 +191,10 @@ app.get("/", (req, res) => {
 // Start server
 const PORT = process.env.PORT || 10000;
 
-app.listen(PORT, () => {
-  console.log(`Beautyrocket webhook listening on port ${PORT}`);
+app.listen(PORT, async () => {
+  console.log(
+    `Beautyrocket webhook listening on port ${PORT}`
+  );
+
+  await initializeDatabase();
 });
