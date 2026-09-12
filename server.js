@@ -7,7 +7,14 @@ const PORT = process.env.PORT || 10000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
 
-// Meta webhook verification
+// Keep track of conversations that have been handed off to Sheila
+const handedOffUsers = new Set();
+
+
+// --------------------------------------------------
+// META WEBHOOK VERIFICATION
+// --------------------------------------------------
+
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -21,21 +28,28 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// Send an Instagram Direct Message
+
+// --------------------------------------------------
+// SEND INSTAGRAM DIRECT MESSAGE
+// --------------------------------------------------
+
 async function sendInstagramMessage(recipientId, text) {
   try {
     const response = await fetch(
       "https://graph.instagram.com/v24.0/me/messages",
       {
         method: "POST",
+
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${INSTAGRAM_ACCESS_TOKEN}`
         },
+
         body: JSON.stringify({
           recipient: {
             id: recipientId
           },
+
           message: {
             text: text
           }
@@ -53,17 +67,45 @@ async function sendInstagramMessage(recipientId, text) {
     }
 
     return data;
+
   } catch (error) {
     console.error("Error sending Instagram message:");
     console.error(error);
   }
 }
 
-// Decide how to respond to an incoming message
+
+// --------------------------------------------------
+// BEAUTY MENU
+// --------------------------------------------------
+
+function beautyMenu() {
+  return (
+    "Absolutely! 💕 What can I help you with?\n\n" +
+    "💇🏽‍♀️ Hair\n" +
+    "💅🏽 Nails\n" +
+    "💄 Makeup\n" +
+    "✨ Skincare\n" +
+    "👁️ Lashes & Brows\n" +
+    "💕 Something personal\n" +
+    "🌸 Other beauty questions"
+  );
+}
+
+
+// --------------------------------------------------
+// RESPONSE LOGIC
+// --------------------------------------------------
+
 function createReply(incomingText) {
+
   const text = incomingText.toLowerCase().trim();
 
-  // Greetings
+
+  // -----------------------------------------------
+  // GREETINGS
+  // -----------------------------------------------
+
   const greetings = [
     "hi",
     "hello",
@@ -74,78 +116,264 @@ function createReply(incomingText) {
     "hola"
   ];
 
-  if (greetings.some(greeting => text === greeting || text.startsWith(greeting + " "))) {
-    return "Hi! 👋💕 Thanks for reaching out! What can I help you with today?\n\n💇🏽‍♀️ Hair\n💅🏽 Nails\n💄 Makeup\n✨ Skincare\n👁️ Lashes & Brows\n🌸 Other beauty questions";
+  if (
+    greetings.some(
+      greeting =>
+        text === greeting ||
+        text.startsWith(greeting + " ")
+    )
+  ) {
+
+    return {
+      reply:
+        "Hi! 👋💕 Thanks for reaching out! What can I help you with today?\n\n" +
+        "💇🏽‍♀️ Hair\n" +
+        "💅🏽 Nails\n" +
+        "💄 Makeup\n" +
+        "✨ Skincare\n" +
+        "👁️ Lashes & Brows\n" +
+        "💕 Something personal\n" +
+        "🌸 Other beauty questions",
+
+      handoff: false
+    };
   }
 
-  // Beauty-related questions
-  const beautyKeywords = [
-    "beauty",
+
+  // -----------------------------------------------
+  // BEAUTY CATEGORY HANDOFF
+  // -----------------------------------------------
+
+  const handoffKeywords = [
+
     "hair",
+
     "nails",
+
     "makeup",
+
     "skincare",
-    "skin",
+    "skin care",
+
     "lashes",
     "lash",
+
     "brows",
     "eyebrows",
+
+    "something personal",
+
+    "other beauty questions",
+    "other beauty"
+  ];
+
+
+  if (
+    handoffKeywords.some(keyword =>
+      text.includes(keyword)
+    )
+  ) {
+
+    return {
+      reply:
+        "Absolutely 😊 Sheila will take it from here and get back to you personally.",
+
+      handoff: true
+    };
+  }
+
+
+  // -----------------------------------------------
+  // GENERAL BEAUTY QUESTIONS
+  // -----------------------------------------------
+
+  const beautyKeywords = [
+    "beauty",
     "cosmetic",
+    "cosmetics",
     "glam"
   ];
 
-  if (beautyKeywords.some(keyword => text.includes(keyword))) {
-    return "Absolutely! 💕 What can I help you with?\n\n💇🏽‍♀️ Hair\n💅🏽 Nails\n💄 Makeup\n✨ Skincare\n👁️ Lashes & Brows\n🌸 Other beauty questions";
+
+  if (
+    beautyKeywords.some(keyword =>
+      text.includes(keyword)
+    )
+  ) {
+
+    return {
+      reply: beautyMenu(),
+      handoff: false
+    };
   }
 
-  // General questions
-  return "Hi! 👋💕 Thanks for reaching out! Tell me a little about what you're looking for and I'll do my best to help.";
+
+  // -----------------------------------------------
+  // GENERAL QUESTIONS
+  // -----------------------------------------------
+
+  return {
+    reply:
+      "Hi! 👋💕 Thanks for reaching out! Tell me a little about what you're looking for and I'll do my best to help.",
+
+    handoff: false
+  };
 }
 
-// Receive Instagram webhook events
+
+// --------------------------------------------------
+// RECEIVE INSTAGRAM WEBHOOK EVENTS
+// --------------------------------------------------
+
 app.post("/webhook", async (req, res) => {
+
   console.log("Instagram webhook event received:");
-  console.log(JSON.stringify(req.body, null, 2));
+
+  console.log(
+    JSON.stringify(req.body, null, 2)
+  );
+
 
   try {
-    if (req.body.object === "instagram") {
-      for (const entry of req.body.entry || []) {
-        for (const messagingEvent of entry.messaging || []) {
 
-          // Ignore messages sent by our own Instagram account
-          if (messagingEvent.message?.is_echo) {
-            console.log("Ignoring own outgoing message.");
+    if (req.body.object === "instagram") {
+
+      for (const entry of req.body.entry || []) {
+
+        for (
+          const messagingEvent of
+          entry.messaging || []
+        ) {
+
+
+          // -----------------------------------------
+          // IGNORE OUR OWN OUTGOING MESSAGES
+          // -----------------------------------------
+
+          if (
+            messagingEvent.message?.is_echo
+          ) {
+
+            console.log(
+              "Ignoring own outgoing message."
+            );
+
             continue;
           }
 
-          // Only respond to incoming messages
-          if (messagingEvent.message && messagingEvent.sender) {
-            const senderId = messagingEvent.sender.id;
-            const incomingText = messagingEvent.message.text || "";
 
-            console.log(`Incoming Instagram message: ${incomingText}`);
+          // -----------------------------------------
+          // ONLY PROCESS INCOMING MESSAGES
+          // -----------------------------------------
 
-            const reply = createReply(incomingText);
+          if (
+            messagingEvent.message &&
+            messagingEvent.sender
+          ) {
 
-            await sendInstagramMessage(senderId, reply);
+            const senderId =
+              messagingEvent.sender.id;
+
+            const incomingText =
+              messagingEvent.message.text || "";
+
+
+            console.log(
+              `Incoming Instagram message: ${incomingText}`
+            );
+
+
+            // ---------------------------------------
+            // CHECK IF SHEILA HAS TAKEN OVER
+            // ---------------------------------------
+
+            if (
+              handedOffUsers.has(senderId)
+            ) {
+
+              console.log(
+                `Conversation already handed off to Sheila for ${senderId}.`
+              );
+
+              continue;
+            }
+
+
+            // ---------------------------------------
+            // DETERMINE RESPONSE
+            // ---------------------------------------
+
+            const response =
+              createReply(incomingText);
+
+
+            // ---------------------------------------
+            // SEND RESPONSE
+            // ---------------------------------------
+
+            await sendInstagramMessage(
+              senderId,
+              response.reply
+            );
+
+
+            // ---------------------------------------
+            // HAND OFF TO SHEILA
+            // ---------------------------------------
+
+            if (response.handoff) {
+
+              handedOffUsers.add(senderId);
+
+              console.log(
+                `Conversation handed off to Sheila for ${senderId}.`
+              );
+            }
           }
         }
       }
     }
+
   } catch (error) {
-    console.error("Error processing Instagram webhook:");
+
+    console.error(
+      "Error processing Instagram webhook:"
+    );
+
     console.error(error);
   }
+
 
   // Always acknowledge Meta's webhook
   res.sendStatus(200);
 });
 
-// Health check
+
+// --------------------------------------------------
+// HEALTH CHECK
+// --------------------------------------------------
+
 app.get("/", (req, res) => {
-  res.status(200).send("Beautyrocket webhook is running.");
+
+  res
+    .status(200)
+    .send(
+      "Beautyrocket webhook is running."
+    );
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Beautyrocket webhook listening on port ${PORT}`);
-});
+
+// --------------------------------------------------
+// START SERVER
+// --------------------------------------------------
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+
+    console.log(
+      `Beautyrocket webhook listening on port ${PORT}`
+    );
+  }
+);
