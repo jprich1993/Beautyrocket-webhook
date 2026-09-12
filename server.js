@@ -59,6 +59,49 @@ async function sendInstagramMessage(recipientId, text) {
   }
 }
 
+// Decide how to respond to an incoming message
+function createReply(incomingText) {
+  const text = incomingText.toLowerCase().trim();
+
+  // Greetings
+  const greetings = [
+    "hi",
+    "hello",
+    "hey",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "hola"
+  ];
+
+  if (greetings.some(greeting => text === greeting || text.startsWith(greeting + " "))) {
+    return "Hi! 👋💕 Thanks for reaching out! What can I help you with today?\n\n💇🏽‍♀️ Hair\n💅🏽 Nails\n💄 Makeup\n✨ Skincare\n👁️ Lashes & Brows\n🌸 Other beauty questions";
+  }
+
+  // Beauty-related questions
+  const beautyKeywords = [
+    "beauty",
+    "hair",
+    "nails",
+    "makeup",
+    "skincare",
+    "skin",
+    "lashes",
+    "lash",
+    "brows",
+    "eyebrows",
+    "cosmetic",
+    "glam"
+  ];
+
+  if (beautyKeywords.some(keyword => text.includes(keyword))) {
+    return "Absolutely! 💕 What can I help you with?\n\n💇🏽‍♀️ Hair\n💅🏽 Nails\n💄 Makeup\n✨ Skincare\n👁️ Lashes & Brows\n🌸 Other beauty questions";
+  }
+
+  // General questions
+  return "Hi! 👋💕 Thanks for reaching out! Tell me a little about what you're looking for and I'll do my best to help.";
+}
+
 // Receive Instagram webhook events
 app.post("/webhook", async (req, res) => {
   console.log("Instagram webhook event received:");
@@ -82,10 +125,9 @@ app.post("/webhook", async (req, res) => {
 
             console.log(`Incoming Instagram message: ${incomingText}`);
 
-            await sendInstagramMessage(
-              senderId,
-              "Hi! 👋 Thanks for reaching out! I got your message and will get back to you shortly. 😊"
-            );
+            const reply = createReply(incomingText);
+
+            await sendInstagramMessage(senderId, reply);
           }
         }
       }
