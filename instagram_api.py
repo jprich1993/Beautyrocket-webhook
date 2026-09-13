@@ -2,7 +2,6 @@ import os
 import sqlite3
 import requests
 from flask import Flask, request
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,7 +23,6 @@ INITIAL_GREETING = (
 
 def initialize_database():
     connection = sqlite3.connect(DATABASE_FILE)
-
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS greeted_users (
@@ -33,16 +31,13 @@ def initialize_database():
         )
         """
     )
-
     connection.commit()
     connection.close()
-
     print("Database initialized successfully.")
 
 
 def has_been_greeted(instagram_user_id):
     connection = sqlite3.connect(DATABASE_FILE)
-
     result = connection.execute(
         """
         SELECT instagram_user_id
@@ -51,15 +46,12 @@ def has_been_greeted(instagram_user_id):
         """,
         (instagram_user_id,),
     ).fetchone()
-
     connection.close()
-
     return result is not None
 
 
 def mark_as_greeted(instagram_user_id):
     connection = sqlite3.connect(DATABASE_FILE)
-
     connection.execute(
         """
         INSERT OR IGNORE INTO greeted_users (instagram_user_id)
@@ -67,7 +59,6 @@ def mark_as_greeted(instagram_user_id):
         """,
         (instagram_user_id,),
     )
-
     connection.commit()
     connection.close()
 
@@ -81,12 +72,8 @@ def send_instagram_message(recipient_id, text):
     }
 
     payload = {
-        "recipient": {
-            "id": recipient_id
-        },
-        "message": {
-            "text": text
-        }
+        "recipient": {"id": recipient_id},
+        "message": {"text": text},
     }
 
     response = requests.post(
@@ -136,7 +123,6 @@ def receive_webhook():
 
             message = messaging_event.get("message", {})
 
-            # Ignore our own outgoing messages.
             if message.get("is_echo"):
                 print("Ignoring own outgoing message.")
                 continue
@@ -161,15 +147,21 @@ def receive_webhook():
                 )
                 continue
 
-            # Record the sender BEFORE sending the greeting.
-            mark_as_greeted(sender_id)
-
             print(f"Sending initial greeting to {sender_id}.")
 
-            send_instagram_message(
+            message_sent = send_instagram_message(
                 sender_id,
-                INITIAL_GREETING,
+                INITIAL_GREETING
             )
+
+            if message_sent:
+                mark_as_greeted(sender_id)
+                print(f"User {sender_id} marked as greeted.")
+            else:
+                print(
+                    f"Greeting failed for {sender_id}; "
+                    "user was not marked as greeted."
+                )
 
     return "", 200
 
