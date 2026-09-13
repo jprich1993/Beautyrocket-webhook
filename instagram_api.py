@@ -129,6 +129,29 @@ def send_instagram_message(recipient_id, text):
     return response.ok
 
 
+def get_messaging_events(entry):
+    """
+    Support both Instagram webhook message formats:
+
+    1. entry[].messaging[]
+       Used by normal Instagram messaging events.
+
+    2. entry[].changes[].value
+       Used by Meta's dashboard webhook test.
+    """
+
+    events = list(entry.get("messaging", []))
+
+    for change in entry.get("changes", []):
+        if change.get("field") == "messages":
+            value = change.get("value", {})
+
+            if value:
+                events.append(value)
+
+    return events
+
+
 @app.get("/")
 def health_check():
     return "Beautyrocket webhook is running."
@@ -159,7 +182,8 @@ def receive_webhook():
         return "", 200
 
     for entry in data.get("entry", []):
-        for messaging_event in entry.get("messaging", []):
+
+        for messaging_event in get_messaging_events(entry):
 
             message = messaging_event.get("message", {})
 
