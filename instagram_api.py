@@ -17,7 +17,8 @@ SQLITE_DATABASE_FILE = "greeted_users.db"
 
 INITIAL_GREETING = (
     "Hi! 👋💕 I’m glad you’re enjoying my content! "
-    "Let’s be online friends! Feel free to follow me, "
+    "Let’s be online friends! "
+    "Feel free to follow me, "
     "ask me questions, or send me suggestions for what "
     "I should film next! 🎥✨"
 )
@@ -228,6 +229,33 @@ def receive_webhook():
                 )
 
     return "", 200
+
+
+@app.get("/facebook-login-callback")
+def facebook_login_callback():
+    """
+    Callback destination for Meta Facebook Login for Business.
+
+    Meta returns the access token in the URL fragment (#), which is
+    intentionally not sent to the server. Token handling will be
+    implemented separately and securely.
+    """
+
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Beautyrocket - Facebook Login</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body>
+        <h1>Beautyrocket Facebook Login</h1>
+        <p>Facebook Login completed successfully.</p>
+        <p>You can close this window.</p>
+    </body>
+    </html>
+    """, 200
 
 
 # Initialize the database when the application starts.
