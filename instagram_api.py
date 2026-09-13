@@ -17,7 +17,7 @@ SQLITE_DATABASE_FILE = "greeted_users.db"
 
 INITIAL_GREETING = (
     "Hi! 👋💕 I’m glad you’re enjoying my content! "
-    "Let’s be online friends. Feel free to follow me, "
+    "Let’s be online friends! Feel free to follow me, "
     "ask me questions, or send me suggestions for what "
     "I should film next! 🎥✨"
 )
