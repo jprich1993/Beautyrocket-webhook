@@ -54,14 +54,24 @@ def initialize_database():
 def has_been_greeted(instagram_user_id):
     connection = get_database_connection()
 
-    result = connection.execute(
-        """
-        SELECT instagram_user_id
-        FROM greeted_users
-        WHERE instagram_user_id = ?
-        """.replace("?", "%s" if DATABASE_URL else "?"),
-        (instagram_user_id,),
-    ).fetchone()
+    if DATABASE_URL:
+        result = connection.execute(
+            """
+            SELECT instagram_user_id
+            FROM greeted_users
+            WHERE instagram_user_id = %s
+            """,
+            (instagram_user_id,),
+        ).fetchone()
+    else:
+        result = connection.execute(
+            """
+            SELECT instagram_user_id
+            FROM greeted_users
+            WHERE instagram_user_id = ?
+            """,
+            (instagram_user_id,),
+        ).fetchone()
 
     connection.close()
 
@@ -196,9 +206,13 @@ def receive_webhook():
     return "", 200
 
 
-if __name__ == "__main__":
-    initialize_database()
+# Initialize the database when the application starts.
+# This is required for both local Python execution and
+# production servers such as Gunicorn on Render.
+initialize_database()
 
+
+if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
 
     app.run(
