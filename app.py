@@ -8,9 +8,35 @@ from functools import wraps
 from werkzeug.security import check_password_hash
 import secrets
 
+# PostgreSQL is the cloud persistence layer. The JSON fallback keeps the app
+# usable locally when DATABASE_URL is not configured.
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except ImportError:
+    psycopg = None
+    dict_row = None
+    Jsonb = None
+
 QUEUE_FILE = Path(os.getenv("BEAUTYROCKET_COMMENT_QUEUE_FILE", "beautyrocket_comment_queue.json"))
 STATS_FILE = Path(os.getenv("BEAUTYROCKET_STATS_FILE", "beautyrocket_production_stats.json"))
 BACKGROUND_FILE = Path(os.getenv("BEAUTYROCKET_BACKGROUND_FILE", "beautyrocket_background.png"))
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DB_ENABLED = bool(DATABASE_URL)
+
+if DB_ENABLED and psycopg is None:
+    raise RuntimeError(
+        "DATABASE_URL is configured, but psycopg is not installed. "
+        "Add psycopg[binary] to requirements.txt and redeploy."
+    )
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+
+QUEUE_TABLE = "beautyrocket_dashboard_queue"
+STATS_TABLE = "beautyrocket_dashboard_stats"
 
 app = Flask(__name__)
 
@@ -352,7 +378,116 @@ setInterval(refreshStats, 10000);
 </html>
 """
 
+def _parse_utc(value):
+    """Convert an ISO timestamp/string to a timezone-aware datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _db_connect():
+    return psycopg.connect(
+        DATABASE_URL,
+        connect_timeout=5,
+        row_factory=dict_row,
+    )
+
+
+def init_db():
+    """Create only Beautyrocket dashboard tables; never modify webhook tables."""
+    if not DB_ENABLED:
+        return
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {QUEUE_TABLE} (
+                    queue_id TEXT PRIMARY KEY,
+                    created_at_utc TIMESTAMPTZ,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    post_id TEXT,
+                    permalink TEXT,
+                    buyer_score INTEGER,
+                    buyer_band TEXT,
+                    follower_score INTEGER,
+                    follower_band TEXT,
+                    best_score INTEGER,
+                    target_action TEXT,
+                    account_type TEXT,
+                    categories JSONB,
+                    safety_pass BOOLEAN,
+                    suggested_comment TEXT,
+                    caption TEXT,
+                    writer_source TEXT,
+                    completed_at_utc TIMESTAMPTZ,
+                    raw_data JSONB NOT NULL DEFAULT '{{}}'::jsonb
+                )
+            """)
+
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{QUEUE_TABLE}_pending_score
+                ON {QUEUE_TABLE} (status, best_score DESC, buyer_score DESC, follower_score DESC)
+            """)
+
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {STATS_TABLE} (
+                    id SMALLINT PRIMARY KEY CHECK (id = 1),
+                    total_likes BIGINT NOT NULL DEFAULT 0,
+                    total_comment_suggestions BIGINT NOT NULL DEFAULT 0,
+                    total_runs BIGINT NOT NULL DEFAULT 0,
+                    last_run_likes INTEGER NOT NULL DEFAULT 0,
+                    last_run_comment_suggestions INTEGER NOT NULL DEFAULT 0,
+                    last_run_at_utc TIMESTAMPTZ,
+                    last_run_new_queue_items INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+
+            cur.execute(f"""
+                INSERT INTO {STATS_TABLE} (id)
+                VALUES (1)
+                ON CONFLICT (id) DO NOTHING
+            """)
+
+        conn.commit()
+
+
+def _queue_row_to_item(row):
+    item = dict(row)
+    raw_data = item.pop("raw_data", None) or {}
+
+    # Preserve the dashboard's existing field names and any future fields.
+    if isinstance(raw_data, dict):
+        merged = {**raw_data, **item}
+    else:
+        merged = item
+
+    if merged.get("categories") is None:
+        merged["categories"] = []
+
+    return merged
+
+
 def load_queue():
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT queue_id, created_at_utc, status, post_id, permalink,
+                           buyer_score, buyer_band, follower_score, follower_band,
+                           best_score, target_action, account_type, categories,
+                           safety_pass, suggested_comment, caption, writer_source,
+                           completed_at_utc, raw_data
+                    FROM {QUEUE_TABLE}
+                    ORDER BY created_at_utc DESC NULLS LAST
+                """)
+                return [_queue_row_to_item(row) for row in cur.fetchall()]
+
     if not QUEUE_FILE.exists():
         return []
     try:
@@ -362,7 +497,90 @@ def load_queue():
         return []
 
 
+def upsert_queue_item(item):
+    """Insert/update one opportunity. Intended for the future bot-to-cloud API."""
+    if not DB_ENABLED:
+        return
+
+    queue_id = str(item.get("queue_id", "")).strip()
+    if not queue_id:
+        raise ValueError("Queue item is missing queue_id.")
+
+    categories = item.get("categories")
+    if not isinstance(categories, list):
+        categories = []
+
+    raw_data = dict(item)
+    created_at = _parse_utc(item.get("created_at_utc"))
+    completed_at = _parse_utc(item.get("completed_at_utc"))
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO {QUEUE_TABLE} (
+                    queue_id, created_at_utc, status, post_id, permalink,
+                    buyer_score, buyer_band, follower_score, follower_band,
+                    best_score, target_action, account_type, categories,
+                    safety_pass, suggested_comment, caption, writer_source,
+                    completed_at_utc, raw_data
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s
+                )
+                ON CONFLICT (queue_id) DO UPDATE SET
+                    created_at_utc = EXCLUDED.created_at_utc,
+                    status = EXCLUDED.status,
+                    post_id = EXCLUDED.post_id,
+                    permalink = EXCLUDED.permalink,
+                    buyer_score = EXCLUDED.buyer_score,
+                    buyer_band = EXCLUDED.buyer_band,
+                    follower_score = EXCLUDED.follower_score,
+                    follower_band = EXCLUDED.follower_band,
+                    best_score = EXCLUDED.best_score,
+                    target_action = EXCLUDED.target_action,
+                    account_type = EXCLUDED.account_type,
+                    categories = EXCLUDED.categories,
+                    safety_pass = EXCLUDED.safety_pass,
+                    suggested_comment = EXCLUDED.suggested_comment,
+                    caption = EXCLUDED.caption,
+                    writer_source = EXCLUDED.writer_source,
+                    completed_at_utc = EXCLUDED.completed_at_utc,
+                    raw_data = EXCLUDED.raw_data
+            """, (
+                queue_id,
+                created_at,
+                item.get("status", "PENDING"),
+                item.get("post_id"),
+                item.get("permalink"),
+                item.get("buyer_score"),
+                item.get("buyer_band"),
+                item.get("follower_score"),
+                item.get("follower_band"),
+                item.get("best_score"),
+                item.get("target_action"),
+                item.get("account_type"),
+                Jsonb(categories),
+                item.get("safety_pass"),
+                item.get("suggested_comment"),
+                item.get("caption"),
+                item.get("writer_source"),
+                completed_at,
+                Jsonb(raw_data),
+            ))
+        conn.commit()
+
+
 def save_queue(data):
+    """JSON-compatible local save; cloud status changes use direct SQL."""
+    if DB_ENABLED:
+        for item in data:
+            upsert_queue_item(item)
+        return
+
     tmp = QUEUE_FILE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, QUEUE_FILE)
@@ -378,6 +596,27 @@ def load_stats():
         "last_run_at_utc": None,
         "last_run_new_queue_items": 0,
     }
+
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT total_likes, total_comment_suggestions, total_runs,
+                           last_run_likes, last_run_comment_suggestions,
+                           last_run_at_utc, last_run_new_queue_items
+                    FROM {STATS_TABLE}
+                    WHERE id = 1
+                """)
+                row = cur.fetchone()
+
+        if not row:
+            return default
+
+        data = dict(row)
+        if data.get("last_run_at_utc"):
+            data["last_run_at_utc"] = data["last_run_at_utc"].isoformat()
+        return {**default, **data}
+
     if not STATS_FILE.exists():
         return default
     try:
@@ -387,12 +626,103 @@ def load_stats():
         return default
 
 
+def save_stats(data):
+    """Persist production statistics to PostgreSQL or the local JSON fallback."""
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    UPDATE {STATS_TABLE}
+                    SET total_likes = %s,
+                        total_comment_suggestions = %s,
+                        total_runs = %s,
+                        last_run_likes = %s,
+                        last_run_comment_suggestions = %s,
+                        last_run_at_utc = %s,
+                        last_run_new_queue_items = %s
+                    WHERE id = 1
+                """, (
+                    data.get("total_likes", 0),
+                    data.get("total_comment_suggestions", 0),
+                    data.get("total_runs", 0),
+                    data.get("last_run_likes", 0),
+                    data.get("last_run_comment_suggestions", 0),
+                    _parse_utc(data.get("last_run_at_utc")),
+                    data.get("last_run_new_queue_items", 0),
+                ))
+            conn.commit()
+        return
+
+    tmp = STATS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, STATS_FILE)
+
+
 def get_pending():
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT queue_id, created_at_utc, status, post_id, permalink,
+                           buyer_score, buyer_band, follower_score, follower_band,
+                           best_score, target_action, account_type, categories,
+                           safety_pass, suggested_comment, caption, writer_source,
+                           completed_at_utc, raw_data
+                    FROM {QUEUE_TABLE}
+                    WHERE status = 'PENDING'
+                    ORDER BY best_score DESC NULLS LAST,
+                             buyer_score DESC NULLS LAST,
+                             follower_score DESC NULLS LAST
+                """)
+                return [_queue_row_to_item(row) for row in cur.fetchall()]
+
     queue = load_queue()
     pending = [x for x in queue if x.get("status") == "PENDING"]
-    pending.sort(key=lambda x: (x.get("best_score", 0), x.get("buyer_score", 0), x.get("follower_score", 0)), reverse=True)
+    pending.sort(
+        key=lambda x: (
+            x.get("best_score", 0),
+            x.get("buyer_score", 0),
+            x.get("follower_score", 0),
+        ),
+        reverse=True,
+    )
     return pending
 
+
+def set_queue_status(queue_id, status):
+    """Persist DONE/SKIPPED without rewriting the entire queue."""
+    completed_at = datetime.now(timezone.utc)
+
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    UPDATE {QUEUE_TABLE}
+                    SET status = %s,
+                        completed_at_utc = %s
+                    WHERE queue_id = %s
+                      AND status = 'PENDING'
+                """, (status, completed_at, queue_id))
+                changed = cur.rowcount > 0
+            conn.commit()
+        return changed
+
+    queue = load_queue()
+    changed = False
+    for item in queue:
+        if item.get("queue_id") == queue_id and item.get("status") == "PENDING":
+            item["status"] = status
+            item["completed_at_utc"] = completed_at.isoformat()
+            changed = True
+            break
+    if changed:
+        save_queue(queue)
+    return changed
+
+
+# Initialize only our two dashboard tables when DATABASE_URL is configured.
+# This does not drop, truncate, or modify any existing webhook tables.
+init_db()
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -457,6 +787,21 @@ def stats():
     return jsonify(data)
 
 
+@app.get("/healthz")
+def healthz():
+    if not DB_ENABLED:
+        return jsonify({"status": "ok", "database": "json-fallback"})
+
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return jsonify({"status": "ok", "database": "postgresql"})
+    except Exception:
+        return jsonify({"status": "error", "database": "postgresql"}), 503
+
+
 @app.get("/background.png")
 def background():
     if not BACKGROUND_FILE.exists():
@@ -470,16 +815,7 @@ def done(queue_id):
     if not valid_csrf(request.form.get("csrf_token")):
         return ("Invalid request.", 400)
 
-    queue = load_queue()
-    changed = False
-    for item in queue:
-        if item.get("queue_id") == queue_id and item.get("status") == "PENDING":
-            item["status"] = "DONE"
-            item["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
-            changed = True
-            break
-    if changed:
-        save_queue(queue)
+    set_queue_status(queue_id, "DONE")
     return redirect(url_for("index"))
 
 
@@ -489,16 +825,7 @@ def skip(queue_id):
     if not valid_csrf(request.form.get("csrf_token")):
         return ("Invalid request.", 400)
 
-    queue = load_queue()
-    changed = False
-    for item in queue:
-        if item.get("queue_id") == queue_id and item.get("status") == "PENDING":
-            item["status"] = "SKIPPED"
-            item["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
-            changed = True
-            break
-    if changed:
-        save_queue(queue)
+    set_queue_status(queue_id, "SKIPPED")
     return redirect(url_for("index"))
 
 
