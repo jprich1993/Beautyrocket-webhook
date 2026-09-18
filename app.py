@@ -7,6 +7,7 @@ from flask import Flask, redirect, render_template_string, request, jsonify, sen
 from functools import wraps
 from werkzeug.security import check_password_hash
 import secrets
+import hmac
 
 # PostgreSQL is the cloud persistence layer. The JSON fallback keeps the app
 # usable locally when DATABASE_URL is not configured.
@@ -46,6 +47,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("BEAUTYROCKET_SESSION_SECRET") or secrets.token_urlsafe(48)
 WEB_USERNAME = os.getenv("BEAUTYROCKET_WEB_USERNAME", "")
 WEB_PASSWORD_HASH = os.getenv("BEAUTYROCKET_WEB_PASSWORD_HASH", "")
+BOT_API_KEY = os.getenv("BEAUTYROCKET_BOT_API_KEY", "").strip()
 
 if not WEB_USERNAME or not WEB_PASSWORD_HASH:
     raise RuntimeError(
@@ -785,6 +787,87 @@ def stats():
     data = load_stats()
     data["pending_count"] = len(get_pending())
     return jsonify(data)
+
+
+
+@app.post("/api/ingest")
+def api_ingest():
+    """
+    Receive queue opportunities and production stats from the local Windows bot.
+
+    Authentication:
+        X-Beautyrocket-Bot-Key: <BOT_API_KEY>
+
+    The endpoint is intentionally one-way: it writes bot data into the
+    dashboard database and does not execute Instagram actions.
+    """
+    if not BOT_API_KEY:
+        return jsonify({"ok": False, "error": "bot_api_not_configured"}), 503
+
+    supplied_key = request.headers.get("X-Beautyrocket-Bot-Key", "")
+    if not supplied_key or not hmac.compare_digest(supplied_key, BOT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "application/json_required"}), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "json_object_required"}), 400
+
+    queue_items = payload.get("queue_items", [])
+    stats = payload.get("stats")
+
+    if queue_items is None:
+        queue_items = []
+    if not isinstance(queue_items, list):
+        return jsonify({"ok": False, "error": "queue_items_must_be_list"}), 400
+
+    if stats is not None and not isinstance(stats, dict):
+        return jsonify({"ok": False, "error": "stats_must_be_object"}), 400
+
+    # Keep the endpoint bounded so an accidental/malicious oversized request
+    # cannot flood the dashboard database.
+    if len(queue_items) > 100:
+        return jsonify({"ok": False, "error": "too_many_queue_items"}), 413
+
+    accepted = 0
+    for item in queue_items:
+        if not isinstance(item, dict) or not str(item.get("queue_id", "")).strip():
+            return jsonify({"ok": False, "error": "invalid_queue_item"}), 400
+
+        # The local bot is authoritative for the opportunity data. Upsert is
+        # idempotent, so retries do not create duplicate records.
+        upsert_queue_item(item)
+        accepted += 1
+
+    if stats is not None:
+        # Only persist the known production-stat fields. This prevents
+        # arbitrary JSON keys from becoming part of the stats record.
+        allowed = {
+            "total_likes",
+            "total_comment_suggestions",
+            "total_runs",
+            "last_run_likes",
+            "last_run_comment_suggestions",
+            "last_run_at_utc",
+            "last_run_new_queue_items",
+        }
+        clean_stats = {
+            key: stats[key]
+            for key in allowed
+            if key in stats
+        }
+        save_stats(clean_stats)
+
+    return jsonify({
+        "ok": True,
+        "queue_items_accepted": accepted,
+        "stats_saved": stats is not None,
+    })
 
 
 @app.get("/healthz")
