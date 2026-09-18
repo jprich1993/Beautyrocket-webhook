@@ -535,7 +535,11 @@ def upsert_queue_item(item):
                 )
                 ON CONFLICT (queue_id) DO UPDATE SET
                     created_at_utc = EXCLUDED.created_at_utc,
-                    status = EXCLUDED.status,
+                    status = CASE
+                        WHEN {QUEUE_TABLE}.status IN ('DONE', 'SKIPPED')
+                            THEN {QUEUE_TABLE}.status
+                        ELSE EXCLUDED.status
+                    END,
                     post_id = EXCLUDED.post_id,
                     permalink = EXCLUDED.permalink,
                     buyer_score = EXCLUDED.buyer_score,
