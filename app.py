@@ -275,18 +275,18 @@ HTML = """
 <div class="wrap">
     <header class="header">
         <h1 class="brand">Beautyrocket</h1>
-        <div class="title">COMMENT REVIEW</div>
+        <div class="title">COMMENT AND LIKE REVIEW</div>
         <div class="tagline">DISCOVER · ENGAGE · GROW</div>
     </header>
 
     <section class="production" aria-label="Production statistics">
         <div class="stat">
             <div class="stat-number" id="total-opportunities">{{ stats.total_comment_suggestions }}</div>
-            <div class="stat-label">Potential Opportunities</div>
+            <div class="stat-label">TOTAL POST ENGAGEMENTS FOUND</div>
         </div>
         <div class="stat">
             <div class="stat-number" id="pending-count">{{ pending|length }}</div>
-            <div class="stat-label">Pending Opportunities</div>
+            <div class="stat-label">PENDING POST ENGAGEMENT</div>
         </div>
         <div class="stat">
             <div class="stat-number" id="ai-comments">{{ stats.pending_ai_comments }}</div>
@@ -296,12 +296,12 @@ HTML = """
 
     <div class="run-line">
         Last execution: <strong id="last-run-comments">+{{ stats.last_run_new_queue_items }}</strong> new opportunities ·
-        <strong>human decides</strong> like / comment / both / neither
+        <strong>user decides</strong> like / comment / both / neither
         {% if stats.last_run_at_utc %} · {{ stats.last_run_at_utc[:19].replace('T', ' ') }} UTC{% endif %}
     </div>
 
     <div class="queue-head">
-        <h2>Human Engagement Opportunities</h2>
+        <h2>Engagement Opportunities</h2>
         <span class="pending-pill">{{ pending|length }} pending</span>
     </div>
 
@@ -309,10 +309,10 @@ HTML = """
         {% for item in pending %}
         <div class="card">
             <div class="score">{{ item.best_score }}/100</div>
-            <div class="meta"><strong>{{ item.opportunity_type or item.target_action or 'ENGAGEMENT OPPORTUNITY' }}</strong></div>
+            <div class="meta"><strong>{{ (item.opportunity_type or item.target_action or 'ENGAGEMENT OPPORTUNITY').replace('_', ' ') }}</strong></div>
             <div class="meta">
-                Buyer: {{ item.buyer_score }} ({{ item.buyer_band }}) ·
-                Follower: {{ item.follower_score }} ({{ item.follower_band }})
+                Buyer: {{ item.buyer_score }} ({{ item.buyer_band.replace('_', ' ') }}) ·
+                Follower: {{ item.follower_score }} ({{ item.follower_band.replace('_', ' ') }})
             </div>
             <div class="meta">Category: {{ item.categories|join(', ') }}</div>
 
@@ -320,7 +320,7 @@ HTML = """
             <div class="comment-label">AI SUGGESTED COMMENT — USE, EDIT, OR IGNORE</div>
             <div class="comment" id="comment-{{ item.queue_id }}">{{ item.suggested_comment }}</div>
             {% else %}
-            <div class="comment-label">NO AI COMMENT AVAILABLE — HUMAN MAY WRITE THEIR OWN</div>
+            <div class="comment-label">NO AI COMMENT AVAILABLE — USER MAY WRITE THEIR OWN</div>
             {% endif %}
 
             <div class="buttons">
