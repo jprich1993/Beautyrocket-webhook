@@ -281,27 +281,27 @@ HTML = """
 
     <section class="production" aria-label="Production statistics">
         <div class="stat">
-            <div class="stat-number" id="total-opportunities">{{ stats.total_comment_suggestions }}</div>
-            <div class="stat-label">Potential Opportunities</div>
+            <div class="stat-number" id="total-likes">{{ stats.total_likes }}</div>
+            <div class="stat-label">Likes Performed</div>
+        </div>
+        <div class="stat">
+            <div class="stat-number" id="total-comments">{{ stats.total_comment_suggestions }}</div>
+            <div class="stat-label">Suggestions Queued</div>
         </div>
         <div class="stat">
             <div class="stat-number" id="pending-count">{{ pending|length }}</div>
             <div class="stat-label">Pending Opportunities</div>
         </div>
-        <div class="stat">
-            <div class="stat-number" id="ai-comments">{{ stats.pending_ai_comments }}</div>
-            <div class="stat-label">AI Comments Available</div>
-        </div>
     </section>
 
     <div class="run-line">
-        Last execution: <strong id="last-run-comments">+{{ stats.last_run_new_queue_items }}</strong> new opportunities ·
-        <strong>human decides</strong> like / comment / both / neither
+        Last execution: <strong id="last-run-likes">+{{ stats.last_run_likes }}</strong> likes ·
+        <strong id="last-run-comments">+{{ stats.last_run_comment_suggestions }}</strong> suggestions
         {% if stats.last_run_at_utc %} · {{ stats.last_run_at_utc[:19].replace('T', ' ') }} UTC{% endif %}
     </div>
 
     <div class="queue-head">
-        <h2>Human Engagement Opportunities</h2>
+        <h2>Comment Opportunities</h2>
         <span class="pending-pill">{{ pending|length }} pending</span>
     </div>
 
@@ -309,26 +309,20 @@ HTML = """
         {% for item in pending %}
         <div class="card">
             <div class="score">{{ item.best_score }}/100</div>
-            <div class="meta"><strong>{{ item.opportunity_type or item.target_action or 'ENGAGEMENT OPPORTUNITY' }}</strong></div>
             <div class="meta">
                 Buyer: {{ item.buyer_score }} ({{ item.buyer_band }}) ·
                 Follower: {{ item.follower_score }} ({{ item.follower_band }})
             </div>
             <div class="meta">Category: {{ item.categories|join(', ') }}</div>
 
-            {% if item.suggested_comment %}
-            <div class="comment-label">AI SUGGESTED COMMENT — USE, EDIT, OR IGNORE</div>
             <div class="comment" id="comment-{{ item.queue_id }}">{{ item.suggested_comment }}</div>
-            {% else %}
-            <div class="comment-label">NO AI COMMENT AVAILABLE — HUMAN MAY WRITE THEIR OWN</div>
-            {% endif %}
 
             <div class="buttons">
-                {% if item.suggested_comment %}<button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">📋 COPY AI COMMENT</button>{% endif %}
+                <button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">📋 COPY COMMENT</button>
                 <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">🎬 OPEN REEL</a>
                 <form method="post" action="/done/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button class="done" type="submit">✓ DONE — ENGAGEMENT HANDLED</button>
+                    <button class="done" type="submit">✓ DONE — COMMENT HANDLED</button>
                 </form>
                 <form method="post" action="/skip/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -342,7 +336,7 @@ HTML = """
         </div>
         {% endfor %}
     {% else %}
-        <div class="empty">No pending engagement opportunities right now.<strong>YOU'RE ALL CAUGHT UP!</strong></div>
+        <div class="empty">No pending comment opportunities right now.<strong>YOU'RE ALL CAUGHT UP!</strong></div>
     {% endif %}
 
     <div style="text-align:center; margin-top:18px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
@@ -352,7 +346,7 @@ HTML = """
             <button class="refresh" type="submit">LOG OUT</button>
         </form>
     </div>
-    <div class="footer">BEAUTYROCKET HUMAN ENGAGEMENT DASHBOARD</div>
+    <div class="footer">BEAUTYROCKET SECURE CLOUD DASHBOARD</div>
 </div>
 
 <script>
@@ -373,10 +367,11 @@ async function refreshStats() {
         const response = await fetch('/stats', { cache: 'no-store' });
         if (!response.ok) return;
         const data = await response.json();
-        document.getElementById('total-opportunities').innerText = data.total_comment_suggestions;
+        document.getElementById('total-likes').innerText = data.total_likes;
+        document.getElementById('total-comments').innerText = data.total_comment_suggestions;
         document.getElementById('pending-count').innerText = data.pending_count;
-        document.getElementById('ai-comments').innerText = data.pending_ai_comments || 0;
-        document.getElementById('last-run-comments').innerText = '+' + (data.last_run_new_queue_items || 0);
+        document.getElementById('last-run-likes').innerText = '+' + data.last_run_likes;
+        document.getElementById('last-run-comments').innerText = '+' + data.last_run_comment_suggestions;
     } catch (e) { /* local dashboard may briefly be unavailable */ }
 }
 setInterval(refreshStats, 10000);
@@ -625,8 +620,6 @@ def load_stats():
         "last_run_comment_suggestions": 0,
         "last_run_at_utc": None,
         "last_run_new_queue_items": 0,
-        "pending_count_unique": 0,
-        "pending_ai_comments": 0,
     }
 
     if DB_ENABLED:
@@ -650,16 +643,13 @@ def load_stats():
                 cur.execute(f"""
                     SELECT
                         COUNT(DISTINCT NULLIF(post_id, '')) AS unique_posts,
-                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING') AS pending_unique_posts,
-                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING' AND COALESCE(suggested_comment, '') <> '') AS pending_ai_comments
+                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING') AS pending_unique_posts
                     FROM {QUEUE_TABLE}
                 """)
                 counts = dict(cur.fetchone() or {})
-        # Dashboard opportunity totals are derived from unique Instagram posts,
+        # Dashboard suggestion totals are derived from unique Instagram posts,
         # so historical duplicate queue rows cannot inflate the visible stats.
         data["total_comment_suggestions"] = int(counts.get("unique_posts", 0) or 0)
-        data["pending_count_unique"] = int(counts.get("pending_unique_posts", 0) or 0)
-        data["pending_ai_comments"] = int(counts.get("pending_ai_comments", 0) or 0)
         data["last_run_comment_suggestions"] = int(data.get("last_run_comment_suggestions", 0) or 0)
         data["last_run_new_queue_items"] = int(data.get("last_run_new_queue_items", 0) or 0)
         if data.get("last_run_at_utc"):
@@ -739,17 +729,7 @@ def get_pending():
                 return [_queue_row_to_item(row) for row in cur.fetchall()]
 
     queue = load_queue()
-    blocked = {str(x.get("post_id", "")).strip() for x in queue
-               if str(x.get("post_id", "")).strip()
-               and x.get("status") in {"DONE", "SKIPPED", "POSTED"}}
-    pending = []
-    seen = set()
-    for item in queue:
-        post_id = str(item.get("post_id", "")).strip()
-        if item.get("status") != "PENDING" or not post_id or post_id in blocked or post_id in seen:
-            continue
-        seen.add(post_id)
-        pending.append(item)
+    pending = [x for x in queue if x.get("status") == "PENDING"]
     pending.sort(
         key=lambda x: (
             x.get("best_score", 0),
