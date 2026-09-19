@@ -962,11 +962,20 @@ def get_next_execution_job(agent_id=None):
 
 
 def finish_execution_job(job_id, success, result="", error=""):
-    """Record an executor result and close the matching dashboard opportunity."""
+    """
+    Record an executor result and close the matching dashboard opportunity.
+
+    Result handling is intentionally idempotent and success-authoritative:
+    - A verified SUCCESS/COMPLETED report is recorded as COMPLETED.
+    - A failure report is recorded as FAILED.
+    - A later verified success report may correct a prior FAILED/RUNNING state.
+      This protects against transient cloud-side reporting mismatches without
+      requiring the Instagram action to be repeated.
+    """
     if not DB_ENABLED:
         return False, "database_not_configured"
 
-    new_status = "COMPLETED" if success else "FAILED"
+    new_status = "COMPLETED" if bool(success) else "FAILED"
     now = datetime.now(timezone.utc)
 
     with _db_connect() as conn:
@@ -982,6 +991,12 @@ def finish_execution_job(job_id, success, result="", error=""):
                 conn.commit()
                 return False, "job_not_found"
 
+            # Do not downgrade a completed execution because of a duplicate,
+            # stale, or late failure callback.
+            if job["status"] == "COMPLETED" and new_status == "FAILED":
+                conn.commit()
+                return True, "COMPLETED"
+
             cur.execute(f"""
                 UPDATE {EXECUTION_TABLE}
                 SET status = %s,
@@ -989,11 +1004,18 @@ def finish_execution_job(job_id, success, result="", error=""):
                     execution_result = %s,
                     execution_error = %s
                 WHERE job_id = %s
-            """, (new_status, now, str(result or "")[:2000], str(error or "")[:2000], job_id))
+            """, (
+                new_status,
+                now,
+                str(result or "")[:2000],
+                str(error or "")[:2000],
+                job_id,
+            ))
 
-            if success:
+            if new_status == "COMPLETED":
                 # Mark the whole Instagram post handled, preserving V4.6's
-                # post-level deduplication rule.
+                # post-level deduplication rule. This is database-only and
+                # never causes another Instagram action.
                 cur.execute(f"""
                     UPDATE {QUEUE_TABLE}
                     SET status = 'DONE',
@@ -1300,9 +1322,37 @@ def api_execution_result():
     if not job_id:
         return jsonify({"ok": False, "error": "job_id_required"}), 400
 
-    success = bool(payload.get("success"))
-    result = str(payload.get("result", "")).strip()
-    error = str(payload.get("error", "")).strip()
+    # Accept the current agent contract plus the explicit terminal status
+    # fields used by older agent/dashboard variants. This makes the cloud
+    # endpoint tolerant without requiring another Instagram execution.
+    raw_success = payload.get("success")
+    if isinstance(raw_success, bool):
+        success = raw_success
+    elif isinstance(raw_success, str):
+        normalized = raw_success.strip().upper()
+        if normalized in {"TRUE", "1", "YES", "SUCCESS", "COMPLETED", "DONE"}:
+            success = True
+        elif normalized in {"FALSE", "0", "NO", "FAIL", "FAILED", "ERROR"}:
+            success = False
+        else:
+            success = False
+    elif raw_success is not None:
+        success = bool(raw_success)
+    else:
+        reported_status = str(payload.get("status", "")).strip().upper()
+        success = reported_status in {"SUCCESS", "COMPLETED", "DONE"}
+
+    result = str(
+        payload.get("result")
+        if payload.get("result") is not None
+        else payload.get("execution_result", "")
+    ).strip()
+
+    error = str(
+        payload.get("error")
+        if payload.get("error") is not None
+        else payload.get("execution_error", "")
+    ).strip()
 
     updated, status = finish_execution_job(
         job_id=job_id,
