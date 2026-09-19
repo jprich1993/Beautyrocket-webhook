@@ -866,37 +866,66 @@ def create_execution_job(queue_id):
             if item["status"] != "PENDING":
                 return None, f"queue_item_not_pending:{item['status']}"
 
-            # A post can have only one execution job. This also prevents
-            # double-clicks and stale browser retries from creating duplicates.
+            # A queue opportunity has one execution record. A normal
+            # approval creates that record; a FAILED execution may be retried
+            # by resetting the same record to APPROVED. Reusing the job_id
+            # preserves the one-job-per-opportunity constraint while allowing
+            # the Windows agent to claim a genuine retry.
             cur.execute(f"""
-                SELECT job_id, status
+                SELECT job_id, status, execution_attempts
                 FROM {EXECUTION_TABLE}
                 WHERE queue_id = %s
                 LIMIT 1
             """, (queue_id,))
             existing = cur.fetchone()
-            if existing:
-                return None, f"already_approved:{existing['status']}"
 
             suggested_comment = str(item["suggested_comment"] or "").strip()
             opportunity_type = "LIKE + COMMENT" if suggested_comment else "LIKE"
-
-            job_id = secrets.token_hex(12)
             approved_at = datetime.now(timezone.utc)
 
-            cur.execute(f"""
-                INSERT INTO {EXECUTION_TABLE} (
-                    job_id, queue_id, client_id, agent_id, status,
-                    opportunity_type, permalink, suggested_comment,
-                    approved_at_utc
-                )
-                VALUES (%s, %s, %s, %s, 'APPROVED',
-                        %s, %s, %s, %s)
-            """, (
-                job_id, queue_id, DEFAULT_CLIENT_ID, DEFAULT_AGENT_ID,
-                opportunity_type, item["permalink"], suggested_comment or None,
-                approved_at,
-            ))
+            if existing:
+                if existing["status"] == "FAILED":
+                    # Re-approve the existing job. Do not reset
+                    # execution_attempts: the next agent claim increments it,
+                    # so the dashboard will show the true retry attempt.
+                    cur.execute(f"""
+                        UPDATE {EXECUTION_TABLE}
+                        SET status = 'APPROVED',
+                            opportunity_type = %s,
+                            permalink = %s,
+                            suggested_comment = %s,
+                            approved_at_utc = %s,
+                            started_at_utc = NULL,
+                            executed_at_utc = NULL,
+                            execution_result = NULL,
+                            execution_error = NULL
+                        WHERE job_id = %s
+                    """, (
+                        opportunity_type,
+                        item["permalink"],
+                        suggested_comment or None,
+                        approved_at,
+                        existing["job_id"],
+                    ))
+                    job_id = existing["job_id"]
+                else:
+                    return None, f"already_approved:{existing['status']}"
+            else:
+                job_id = secrets.token_hex(12)
+
+                cur.execute(f"""
+                    INSERT INTO {EXECUTION_TABLE} (
+                        job_id, queue_id, client_id, agent_id, status,
+                        opportunity_type, permalink, suggested_comment,
+                        approved_at_utc
+                    )
+                    VALUES (%s, %s, %s, %s, 'APPROVED',
+                            %s, %s, %s, %s)
+                """, (
+                    job_id, queue_id, DEFAULT_CLIENT_ID, DEFAULT_AGENT_ID,
+                    opportunity_type, item["permalink"], suggested_comment or None,
+                    approved_at,
+                ))
 
         conn.commit()
 
@@ -962,20 +991,11 @@ def get_next_execution_job(agent_id=None):
 
 
 def finish_execution_job(job_id, success, result="", error=""):
-    """
-    Record an executor result and close the matching dashboard opportunity.
-
-    Result handling is intentionally idempotent and success-authoritative:
-    - A verified SUCCESS/COMPLETED report is recorded as COMPLETED.
-    - A failure report is recorded as FAILED.
-    - A later verified success report may correct a prior FAILED/RUNNING state.
-      This protects against transient cloud-side reporting mismatches without
-      requiring the Instagram action to be repeated.
-    """
+    """Record an executor result and close the matching dashboard opportunity."""
     if not DB_ENABLED:
         return False, "database_not_configured"
 
-    new_status = "COMPLETED" if bool(success) else "FAILED"
+    new_status = "COMPLETED" if success else "FAILED"
     now = datetime.now(timezone.utc)
 
     with _db_connect() as conn:
@@ -991,12 +1011,6 @@ def finish_execution_job(job_id, success, result="", error=""):
                 conn.commit()
                 return False, "job_not_found"
 
-            # Do not downgrade a completed execution because of a duplicate,
-            # stale, or late failure callback.
-            if job["status"] == "COMPLETED" and new_status == "FAILED":
-                conn.commit()
-                return True, "COMPLETED"
-
             cur.execute(f"""
                 UPDATE {EXECUTION_TABLE}
                 SET status = %s,
@@ -1004,18 +1018,11 @@ def finish_execution_job(job_id, success, result="", error=""):
                     execution_result = %s,
                     execution_error = %s
                 WHERE job_id = %s
-            """, (
-                new_status,
-                now,
-                str(result or "")[:2000],
-                str(error or "")[:2000],
-                job_id,
-            ))
+            """, (new_status, now, str(result or "")[:2000], str(error or "")[:2000], job_id))
 
-            if new_status == "COMPLETED":
+            if success:
                 # Mark the whole Instagram post handled, preserving V4.6's
-                # post-level deduplication rule. This is database-only and
-                # never causes another Instagram action.
+                # post-level deduplication rule.
                 cur.execute(f"""
                     UPDATE {QUEUE_TABLE}
                     SET status = 'DONE',
@@ -1322,37 +1329,9 @@ def api_execution_result():
     if not job_id:
         return jsonify({"ok": False, "error": "job_id_required"}), 400
 
-    # Accept the current agent contract plus the explicit terminal status
-    # fields used by older agent/dashboard variants. This makes the cloud
-    # endpoint tolerant without requiring another Instagram execution.
-    raw_success = payload.get("success")
-    if isinstance(raw_success, bool):
-        success = raw_success
-    elif isinstance(raw_success, str):
-        normalized = raw_success.strip().upper()
-        if normalized in {"TRUE", "1", "YES", "SUCCESS", "COMPLETED", "DONE"}:
-            success = True
-        elif normalized in {"FALSE", "0", "NO", "FAIL", "FAILED", "ERROR"}:
-            success = False
-        else:
-            success = False
-    elif raw_success is not None:
-        success = bool(raw_success)
-    else:
-        reported_status = str(payload.get("status", "")).strip().upper()
-        success = reported_status in {"SUCCESS", "COMPLETED", "DONE"}
-
-    result = str(
-        payload.get("result")
-        if payload.get("result") is not None
-        else payload.get("execution_result", "")
-    ).strip()
-
-    error = str(
-        payload.get("error")
-        if payload.get("error") is not None
-        else payload.get("execution_error", "")
-    ).strip()
+    success = bool(payload.get("success"))
+    result = str(payload.get("result", "")).strip()
+    error = str(payload.get("error", "")).strip()
 
     updated, status = finish_execution_job(
         job_id=job_id,
