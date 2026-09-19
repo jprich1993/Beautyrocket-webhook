@@ -309,7 +309,7 @@ HTML = """
         {% for item in pending %}
         <div class="card">
             <div class="score">{{ item.best_score }}/100</div>
-            <div class="meta"><strong>{{ (item.opportunity_type or item.target_action or 'ENGAGEMENT OPPORTUNITY').replace('_', ' ') }}</strong></div>
+            <div class="meta"><strong>{% if item.suggested_comment %}LIKE + COMMENT{% else %}LIKE{% endif %}</strong></div>
             <div class="meta">
                 Buyer: {{ item.buyer_score }} ({{ item.buyer_band.replace('_', ' ') }}) ·
                 Follower: {{ item.follower_score }} ({{ item.follower_band.replace('_', ' ') }})
