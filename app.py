@@ -38,6 +38,7 @@ if DATABASE_URL.startswith("postgres://"):
 
 QUEUE_TABLE = "beautyrocket_dashboard_queue"
 STATS_TABLE = "beautyrocket_dashboard_stats"
+EXECUTION_TABLE = "beautyrocket_execution_jobs"
 
 app = Flask(__name__)
 
@@ -48,6 +49,10 @@ app.secret_key = os.getenv("BEAUTYROCKET_SESSION_SECRET") or secrets.token_urlsa
 WEB_USERNAME = os.getenv("BEAUTYROCKET_WEB_USERNAME", "")
 WEB_PASSWORD_HASH = os.getenv("BEAUTYROCKET_WEB_PASSWORD_HASH", "")
 BOT_API_KEY = os.getenv("BEAUTYROCKET_BOT_API_KEY", "").strip()
+EXECUTION_AGENT_API_KEY = os.getenv("BEAUTYROCKET_EXECUTION_AGENT_KEY", "").strip()
+DEFAULT_CLIENT_ID = os.getenv("BEAUTYROCKET_DEFAULT_CLIENT_ID", "client_0001").strip() or "client_0001"
+DEFAULT_AGENT_ID = os.getenv("BEAUTYROCKET_DEFAULT_AGENT_ID", "agent_0001").strip() or "agent_0001"
+EXECUTION_DELAY_SECONDS = 60
 
 if not WEB_USERNAME or not WEB_PASSWORD_HASH:
     raise RuntimeError(
@@ -179,7 +184,7 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beautyrocket — Comment Review</title>
+<title>Beautyrocket — V4.7 Execution Dashboard</title>
 <style>
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -294,6 +299,10 @@ HTML = """
         </div>
     </section>
 
+    <div class="run-line" style="margin-bottom:8px;">
+        <strong>V4.7:</strong> each opportunity is approved individually; the Windows execution agent uses the operator's already-authenticated Instagram browser session.
+    </div>
+
     <div class="run-line">
         Last execution: <strong id="last-run-comments">+{{ stats.last_run_new_queue_items }}</strong> new opportunities ·
         <strong>user decides</strong> like / comment / both / neither
@@ -310,6 +319,13 @@ HTML = """
         <div class="card">
             <div class="score">{{ item.best_score }}/100</div>
             <div class="meta"><strong>{% if item.suggested_comment %}LIKE + COMMENT{% else %}LIKE{% endif %}</strong></div>
+            {% set execution = execution_map.get(item.queue_id) %}
+            {% if execution %}
+            <div class="meta" style="margin-top:7px;">
+                EXECUTION: <strong>{{ execution.status }}</strong>
+                {% if execution.execution_attempts %} · Attempts: {{ execution.execution_attempts }}{% endif %}
+            </div>
+            {% endif %}
             <div class="meta">
                 Buyer: {{ item.buyer_score }} ({{ item.buyer_band.replace('_', ' ') }}) ·
                 Follower: {{ item.follower_score }} ({{ item.follower_band.replace('_', ' ') }})
@@ -326,6 +342,17 @@ HTML = """
             <div class="buttons">
                 {% if item.suggested_comment %}<button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">📋 COPY AI COMMENT</button>{% endif %}
                 <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">🎬 OPEN REEL</a>
+                {% if not execution %}
+                <form method="post" action="/execute/{{ item.queue_id }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="done" type="submit">▶ EXECUTE THIS OPPORTUNITY</button>
+                </form>
+                {% elif execution.status == 'FAILED' %}
+                <form method="post" action="/execute/{{ item.queue_id }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="done" type="submit">↻ RETRY THIS OPPORTUNITY</button>
+                </form>
+                {% endif %}
                 <form method="post" action="/done/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button class="done" type="submit">✓ DONE — ENGAGEMENT HANDLED</button>
@@ -352,7 +379,7 @@ HTML = """
             <button class="refresh" type="submit">LOG OUT</button>
         </form>
     </div>
-    <div class="footer">BEAUTYROCKET HUMAN ENGAGEMENT DASHBOARD</div>
+    <div class="footer">BEAUTYROCKET V4.7 — HUMAN-APPROVED EXECUTION DASHBOARD</div>
 </div>
 
 <script>
@@ -459,6 +486,34 @@ def init_db():
                 INSERT INTO {STATS_TABLE} (id)
                 VALUES (1)
                 ON CONFLICT (id) DO NOTHING
+            """)
+
+            # V4.7 execution jobs are separate from the V4.6 discovery queue.
+            # This keeps discovery one-way while giving the Windows executor a
+            # small, auditable job queue. No Instagram credentials are stored.
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {EXECUTION_TABLE} (
+                    job_id TEXT PRIMARY KEY,
+                    queue_id TEXT NOT NULL UNIQUE,
+                    client_id TEXT NOT NULL DEFAULT 'client_0001',
+                    agent_id TEXT NOT NULL DEFAULT 'agent_0001',
+                    status TEXT NOT NULL DEFAULT 'APPROVED',
+                    opportunity_type TEXT NOT NULL,
+                    permalink TEXT,
+                    suggested_comment TEXT,
+                    approved_at_utc TIMESTAMPTZ NOT NULL,
+                    started_at_utc TIMESTAMPTZ,
+                    executed_at_utc TIMESTAMPTZ,
+                    execution_result TEXT,
+                    execution_error TEXT,
+                    execution_attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{EXECUTION_TABLE}_status_created
+                ON {EXECUTION_TABLE} (status, created_at_utc ASC)
             """)
 
         conn.commit()
@@ -761,6 +816,217 @@ def get_pending():
     return pending
 
 
+def _execution_row_to_item(row):
+    item = dict(row)
+    for key in ("approved_at_utc", "started_at_utc", "executed_at_utc", "created_at_utc"):
+        if item.get(key):
+            item[key] = item[key].isoformat()
+    return item
+
+
+def get_execution_for_queue(queue_id):
+    """Return the latest execution job for a queue opportunity, if any."""
+    if not DB_ENABLED:
+        return None
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT job_id, queue_id, client_id, agent_id, status,
+                       opportunity_type, permalink, suggested_comment,
+                       approved_at_utc, started_at_utc, executed_at_utc,
+                       execution_result, execution_error,
+                       execution_attempts, created_at_utc
+                FROM {EXECUTION_TABLE}
+                WHERE queue_id = %s
+                LIMIT 1
+            """, (queue_id,))
+            row = cur.fetchone()
+    return _execution_row_to_item(row) if row else None
+
+
+def create_execution_job(queue_id):
+    """Approve exactly one pending dashboard opportunity."""
+    if not DB_ENABLED:
+        return None, "database_not_configured"
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT queue_id, post_id, permalink, status, suggested_comment,
+                       target_action
+                FROM {QUEUE_TABLE}
+                WHERE queue_id = %s
+                LIMIT 1
+            """, (queue_id,))
+            item = cur.fetchone()
+
+            if not item:
+                return None, "queue_item_not_found"
+
+            if item["status"] != "PENDING":
+                return None, f"queue_item_not_pending:{item['status']}"
+
+            # A post can have only one execution job. This also prevents
+            # double-clicks and stale browser retries from creating duplicates.
+            cur.execute(f"""
+                SELECT job_id, status
+                FROM {EXECUTION_TABLE}
+                WHERE queue_id = %s
+                LIMIT 1
+            """, (queue_id,))
+            existing = cur.fetchone()
+            if existing:
+                return None, f"already_approved:{existing['status']}"
+
+            suggested_comment = str(item["suggested_comment"] or "").strip()
+            opportunity_type = "LIKE + COMMENT" if suggested_comment else "LIKE"
+
+            job_id = secrets.token_hex(12)
+            approved_at = datetime.now(timezone.utc)
+
+            cur.execute(f"""
+                INSERT INTO {EXECUTION_TABLE} (
+                    job_id, queue_id, client_id, agent_id, status,
+                    opportunity_type, permalink, suggested_comment,
+                    approved_at_utc
+                )
+                VALUES (%s, %s, %s, %s, 'APPROVED',
+                        %s, %s, %s, %s)
+            """, (
+                job_id, queue_id, DEFAULT_CLIENT_ID, DEFAULT_AGENT_ID,
+                opportunity_type, item["permalink"], suggested_comment or None,
+                approved_at,
+            ))
+
+        conn.commit()
+
+    return job_id, None
+
+
+def get_next_execution_job(agent_id=None):
+    """Atomically claim the oldest approved job for a Windows executor."""
+    if not DB_ENABLED:
+        return None
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            if agent_id:
+                cur.execute(f"""
+                    SELECT job_id, queue_id, client_id, agent_id, status,
+                           opportunity_type, permalink, suggested_comment,
+                           approved_at_utc, started_at_utc, executed_at_utc,
+                           execution_result, execution_error,
+                           execution_attempts, created_at_utc
+                    FROM {EXECUTION_TABLE}
+                    WHERE status = 'APPROVED'
+                      AND agent_id = %s
+                    ORDER BY created_at_utc ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                """, (agent_id,))
+            else:
+                cur.execute(f"""
+                    SELECT job_id, queue_id, client_id, agent_id, status,
+                           opportunity_type, permalink, suggested_comment,
+                           approved_at_utc, started_at_utc, executed_at_utc,
+                           execution_result, execution_error,
+                           execution_attempts, created_at_utc
+                    FROM {EXECUTION_TABLE}
+                    WHERE status = 'APPROVED'
+                    ORDER BY created_at_utc ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                """)
+
+            row = cur.fetchone()
+            if not row:
+                conn.commit()
+                return None
+
+            started_at = datetime.now(timezone.utc)
+            cur.execute(f"""
+                UPDATE {EXECUTION_TABLE}
+                SET status = 'RUNNING',
+                    started_at_utc = %s,
+                    execution_attempts = execution_attempts + 1
+                WHERE job_id = %s
+            """, (started_at, row["job_id"]))
+
+        conn.commit()
+
+    item = _execution_row_to_item(row)
+    item["status"] = "RUNNING"
+    item["started_at_utc"] = started_at.isoformat()
+    item["execution_delay_seconds"] = EXECUTION_DELAY_SECONDS
+    return item
+
+
+def finish_execution_job(job_id, success, result="", error=""):
+    """Record an executor result and close the matching dashboard opportunity."""
+    if not DB_ENABLED:
+        return False, "database_not_configured"
+
+    new_status = "COMPLETED" if success else "FAILED"
+    now = datetime.now(timezone.utc)
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT queue_id, status
+                FROM {EXECUTION_TABLE}
+                WHERE job_id = %s
+                LIMIT 1
+            """, (job_id,))
+            job = cur.fetchone()
+            if not job:
+                conn.commit()
+                return False, "job_not_found"
+
+            cur.execute(f"""
+                UPDATE {EXECUTION_TABLE}
+                SET status = %s,
+                    executed_at_utc = %s,
+                    execution_result = %s,
+                    execution_error = %s
+                WHERE job_id = %s
+            """, (new_status, now, str(result or "")[:2000], str(error or "")[:2000], job_id))
+
+            if success:
+                # Mark the whole Instagram post handled, preserving V4.6's
+                # post-level deduplication rule.
+                cur.execute(f"""
+                    UPDATE {QUEUE_TABLE}
+                    SET status = 'DONE',
+                        completed_at_utc = %s
+                    WHERE post_id = (
+                        SELECT post_id FROM {QUEUE_TABLE} WHERE queue_id = %s
+                    )
+                      AND status = 'PENDING'
+                """, (now, job["queue_id"]))
+
+        conn.commit()
+
+    return True, new_status
+
+
+def list_execution_jobs(limit=100):
+    if not DB_ENABLED:
+        return []
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT job_id, queue_id, client_id, agent_id, status,
+                       opportunity_type, permalink, suggested_comment,
+                       approved_at_utc, started_at_utc, executed_at_utc,
+                       execution_result, execution_error,
+                       execution_attempts, created_at_utc
+                FROM {EXECUTION_TABLE}
+                ORDER BY created_at_utc DESC
+                LIMIT %s
+            """, (max(1, min(int(limit), 500)),))
+            return [_execution_row_to_item(row) for row in cur.fetchall()]
+
+
 def set_queue_status(queue_id, status):
     """Persist DONE/SKIPPED without rewriting the entire queue."""
     completed_at = datetime.now(timezone.utc)
@@ -845,10 +1111,16 @@ def logout():
 def index():
     pending = get_pending()
     stats = load_stats()
+    execution_map = {
+        item["queue_id"]: item
+        for item in list_execution_jobs(500)
+        if item.get("queue_id")
+    }
     return render_template_string(
         HTML,
         pending=pending,
         stats=stats,
+        execution_map=execution_map,
         csrf_token=session["csrf_token"],
     )
 
@@ -974,6 +1246,86 @@ def background():
     if not BACKGROUND_FILE.exists():
         return ("Background image not found. Copy beautyrocket_background.png next to app.py.", 404)
     return send_file(BACKGROUND_FILE, mimetype="image/png", max_age=3600)
+
+
+@app.post("/execute/<queue_id>")
+@login_required
+def execute_opportunity(queue_id):
+    """Approve exactly one visible opportunity for the assigned executor."""
+    if not valid_csrf(request.form.get("csrf_token")):
+        return ("Invalid request.", 400)
+
+    job_id, error = create_execution_job(queue_id)
+    if error:
+        if error.startswith("already_approved:"):
+            return redirect(url_for("index"))
+        return (f"Could not create execution job: {error}", 409)
+
+    return redirect(url_for("index"))
+
+
+@app.get("/api/execution/next")
+def api_execution_next():
+    """Windows agent endpoint: claim one approved job."""
+    if not EXECUTION_AGENT_API_KEY:
+        return jsonify({"ok": False, "error": "execution_agent_not_configured"}), 503
+
+    supplied_key = request.headers.get("X-Beautyrocket-Execution-Key", "")
+    if not supplied_key or not hmac.compare_digest(supplied_key, EXECUTION_AGENT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    agent_id = request.args.get("agent_id", DEFAULT_AGENT_ID).strip() or DEFAULT_AGENT_ID
+    job = get_next_execution_job(agent_id)
+    if not job:
+        return jsonify({"ok": True, "job": None})
+
+    return jsonify({"ok": True, "job": job})
+
+
+@app.post("/api/execution/result")
+def api_execution_result():
+    """Windows agent endpoint: report one execution result."""
+    if not EXECUTION_AGENT_API_KEY:
+        return jsonify({"ok": False, "error": "execution_agent_not_configured"}), 503
+
+    supplied_key = request.headers.get("X-Beautyrocket-Execution-Key", "")
+    if not supplied_key or not hmac.compare_digest(supplied_key, EXECUTION_AGENT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "application/json_required"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    job_id = str(payload.get("job_id", "")).strip()
+    if not job_id:
+        return jsonify({"ok": False, "error": "job_id_required"}), 400
+
+    success = bool(payload.get("success"))
+    result = str(payload.get("result", "")).strip()
+    error = str(payload.get("error", "")).strip()
+
+    updated, status = finish_execution_job(
+        job_id=job_id,
+        success=success,
+        result=result,
+        error=error,
+    )
+    if not updated:
+        return jsonify({"ok": False, "error": status}), 404
+
+    return jsonify({"ok": True, "status": status})
+
+
+@app.get("/api/execution/jobs")
+@login_required
+def execution_jobs():
+    return jsonify({
+        "ok": True,
+        "jobs": list_execution_jobs(100),
+        "execution_delay_seconds": EXECUTION_DELAY_SECONDS,
+        "default_client_id": DEFAULT_CLIENT_ID,
+        "default_agent_id": DEFAULT_AGENT_ID,
+    })
 
 
 @app.post("/done/<queue_id>")
