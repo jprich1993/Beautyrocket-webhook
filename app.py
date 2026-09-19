@@ -500,13 +500,21 @@ def load_queue():
 
 
 def upsert_queue_item(item):
-    """Insert/update one opportunity. Intended for the future bot-to-cloud API."""
+    """Insert/update one opportunity with permanent post-level dedup.
+
+    Returns True only when this request creates a genuinely new unique post
+    opportunity. Existing PENDING/DONE/SKIPPED/POSTED rows block new queue IDs
+    for the same Instagram post.
+    """
     if not DB_ENABLED:
-        return
+        return False
 
     queue_id = str(item.get("queue_id", "")).strip()
+    post_id = str(item.get("post_id", "")).strip()
     if not queue_id:
         raise ValueError("Queue item is missing queue_id.")
+    if not post_id:
+        raise ValueError("Queue item is missing post_id.")
 
     categories = item.get("categories")
     if not isinstance(categories, list):
@@ -518,6 +526,28 @@ def upsert_queue_item(item):
 
     with _db_connect() as conn:
         with conn.cursor() as cur:
+            # Post-level guard. If ANY prior opportunity for this post is
+            # PENDING/DONE/SKIPPED/POSTED, a new queue ID cannot resurrect it.
+            cur.execute(f"""
+                SELECT queue_id, status
+                FROM {QUEUE_TABLE}
+                WHERE post_id = %s
+                  AND status IN ('PENDING', 'DONE', 'SKIPPED', 'POSTED')
+                ORDER BY CASE status
+                    WHEN 'DONE' THEN 1
+                    WHEN 'SKIPPED' THEN 2
+                    WHEN 'POSTED' THEN 3
+                    WHEN 'PENDING' THEN 4
+                    ELSE 5
+                END, created_at_utc ASC NULLS LAST
+                LIMIT 1
+            """, (post_id,))
+            existing = cur.fetchone()
+
+            if existing and str(existing["queue_id"]) != queue_id:
+                conn.commit()
+                return False
+
             cur.execute(f"""
                 INSERT INTO {QUEUE_TABLE} (
                     queue_id, created_at_utc, status, post_id, permalink,
@@ -557,28 +587,17 @@ def upsert_queue_item(item):
                     completed_at_utc = EXCLUDED.completed_at_utc,
                     raw_data = EXCLUDED.raw_data
             """, (
-                queue_id,
-                created_at,
-                item.get("status", "PENDING"),
-                item.get("post_id"),
-                item.get("permalink"),
-                item.get("buyer_score"),
-                item.get("buyer_band"),
-                item.get("follower_score"),
-                item.get("follower_band"),
-                item.get("best_score"),
-                item.get("target_action"),
-                item.get("account_type"),
-                Jsonb(categories),
-                item.get("safety_pass"),
-                item.get("suggested_comment"),
-                item.get("caption"),
-                item.get("writer_source"),
-                completed_at,
-                Jsonb(raw_data),
+                queue_id, created_at, item.get("status", "PENDING"), post_id,
+                item.get("permalink"), item.get("buyer_score"),
+                item.get("buyer_band"), item.get("follower_score"),
+                item.get("follower_band"), item.get("best_score"),
+                item.get("target_action") or item.get("action_decision"),
+                item.get("account_type"), Jsonb(categories), item.get("safety_pass"),
+                item.get("suggested_comment"), item.get("caption"),
+                item.get("writer_source"), completed_at, Jsonb(raw_data),
             ))
         conn.commit()
-
+    return existing is None
 
 def save_queue(data):
     """JSON-compatible local save; cloud status changes use direct SQL."""
@@ -619,6 +638,20 @@ def load_stats():
             return default
 
         data = dict(row)
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COUNT(DISTINCT NULLIF(post_id, '')) AS unique_posts,
+                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING') AS pending_unique_posts
+                    FROM {QUEUE_TABLE}
+                """)
+                counts = dict(cur.fetchone() or {})
+        # Dashboard suggestion totals are derived from unique Instagram posts,
+        # so historical duplicate queue rows cannot inflate the visible stats.
+        data["total_comment_suggestions"] = int(counts.get("unique_posts", 0) or 0)
+        data["last_run_comment_suggestions"] = int(data.get("last_run_comment_suggestions", 0) or 0)
+        data["last_run_new_queue_items"] = int(data.get("last_run_new_queue_items", 0) or 0)
         if data.get("last_run_at_utc"):
             data["last_run_at_utc"] = data["last_run_at_utc"].isoformat()
         return {**default, **data}
@@ -669,16 +702,29 @@ def get_pending():
         with _db_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    SELECT queue_id, created_at_utc, status, post_id, permalink,
-                           buyer_score, buyer_band, follower_score, follower_band,
-                           best_score, target_action, account_type, categories,
-                           safety_pass, suggested_comment, caption, writer_source,
-                           completed_at_utc, raw_data
-                    FROM {QUEUE_TABLE}
-                    WHERE status = 'PENDING'
-                    ORDER BY best_score DESC NULLS LAST,
-                             buyer_score DESC NULLS LAST,
-                             follower_score DESC NULLS LAST
+                    SELECT q.queue_id, q.created_at_utc, q.status, q.post_id, q.permalink,
+                           q.buyer_score, q.buyer_band, q.follower_score, q.follower_band,
+                           q.best_score, q.target_action, q.account_type, q.categories,
+                           q.safety_pass, q.suggested_comment, q.caption, q.writer_source,
+                           q.completed_at_utc, q.raw_data
+                    FROM {QUEUE_TABLE} q
+                    WHERE q.status = 'PENDING'
+                      AND q.post_id IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM {QUEUE_TABLE} blocked
+                          WHERE blocked.post_id = q.post_id
+                            AND blocked.status IN ('DONE', 'SKIPPED', 'POSTED')
+                      )
+                      AND q.queue_id = (
+                          SELECT q2.queue_id FROM {QUEUE_TABLE} q2
+                          WHERE q2.post_id = q.post_id
+                            AND q2.status = 'PENDING'
+                          ORDER BY q2.best_score DESC NULLS LAST, q2.created_at_utc ASC NULLS LAST
+                          LIMIT 1
+                      )
+                    ORDER BY q.best_score DESC NULLS LAST,
+                             q.buyer_score DESC NULLS LAST,
+                             q.follower_score DESC NULLS LAST
                 """)
                 return [_queue_row_to_item(row) for row in cur.fetchall()]
 
@@ -703,11 +749,13 @@ def set_queue_status(queue_id, status):
         with _db_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    UPDATE {QUEUE_TABLE}
+                    UPDATE {QUEUE_TABLE} q
                     SET status = %s,
                         completed_at_utc = %s
-                    WHERE queue_id = %s
-                      AND status = 'PENDING'
+                    WHERE q.post_id = (
+                        SELECT post_id FROM {QUEUE_TABLE} WHERE queue_id = %s
+                    )
+                      AND q.status = 'PENDING'
                 """, (status, completed_at, queue_id))
                 changed = cur.rowcount > 0
             conn.commit()
@@ -839,14 +887,21 @@ def api_ingest():
         return jsonify({"ok": False, "error": "too_many_queue_items"}), 413
 
     accepted = 0
+    blocked = 0
     for item in queue_items:
-        if not isinstance(item, dict) or not str(item.get("queue_id", "")).strip():
+        if (
+            not isinstance(item, dict)
+            or not str(item.get("queue_id", "")).strip()
+            or not str(item.get("post_id", "")).strip()
+        ):
             return jsonify({"ok": False, "error": "invalid_queue_item"}), 400
 
-        # The local bot is authoritative for the opportunity data. Upsert is
-        # idempotent, so retries do not create duplicate records.
-        upsert_queue_item(item)
-        accepted += 1
+        # Post-level dedup is authoritative at the cloud boundary. A retry or
+        # a different AI comment for an already-known post is not a new card.
+        if upsert_queue_item(item):
+            accepted += 1
+        else:
+            blocked += 1
 
     if stats is not None:
         # Only persist the known production-stat fields. This prevents
@@ -865,11 +920,16 @@ def api_ingest():
             for key in allowed
             if key in stats
         }
+        # Never trust the local bot's duplicate-sensitive suggestion counters.
+        # The cloud DB is the source of truth for unique-post statistics.
+        clean_stats["last_run_new_queue_items"] = accepted
+        clean_stats["last_run_comment_suggestions"] = accepted
         save_stats(clean_stats)
 
     return jsonify({
         "ok": True,
         "queue_items_accepted": accepted,
+        "queue_items_blocked_as_duplicate": blocked,
         "stats_saved": stats is not None,
     })
 
