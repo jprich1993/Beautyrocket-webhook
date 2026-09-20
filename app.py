@@ -183,7 +183,7 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beauty Rocket — Manual Review Dashboard</title>
+<title>Beauty Rocket — Manual Review Dashboard V5.2</title>
 <style>
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -253,7 +253,7 @@ HTML = """
 
     .production {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(4, 1fr);
         gap: 12px;
         margin-bottom: 18px;
     }
@@ -270,6 +270,36 @@ HTML = """
     .stat-label { margin-top: 7px; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: #6f6666; font-weight: 700; }
     .run-line { text-align: center; color: #746a6a; font-size: 12px; margin: 0 0 20px; }
     .run-line strong { color: #b75e6d; }
+
+    .platform-section {
+        border: 2px solid rgba(198,111,124,.34);
+        border-radius: 24px;
+        padding: 16px;
+        margin-top: 18px;
+        background: rgba(255,255,255,.18);
+        box-shadow: 0 10px 34px rgba(91,64,57,.08);
+    }
+    .platform-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: rgba(255,255,255,.86);
+        border: 1px solid rgba(198,111,124,.24);
+        color: #7d3543;
+        border-radius: 999px;
+        padding: 6px 11px;
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+    }
+    .platform-section .queue-head {
+        margin-top: 0;
+    }
+    .platform-section .card:first-of-type {
+        margin-top: 14px;
+    }
 
     .queue-head {
         display: flex;
@@ -307,7 +337,7 @@ HTML = """
 
     @media (max-width: 560px) {
         .wrap { padding: 18px 11px 32px; }
-        .production { gap: 7px; }
+        .production { grid-template-columns: repeat(2, 1fr); gap: 7px; }
         .stat { padding: 13px 7px; border-radius: 15px; }
         .stat-number { font-size: 25px; }
         .stat-label { font-size: 9px; letter-spacing: .8px; }
@@ -329,15 +359,19 @@ HTML = """
     <section class="production" aria-label="Production statistics">
         <div class="stat">
             <div class="stat-number" id="total-opportunities">{{ stats.total_comment_suggestions }}</div>
-            <div class="stat-label">TOTAL POST ENGAGEMENTS FOUND</div>
+            <div class="stat-label">TOTAL OPPORTUNITIES FOUND</div>
         </div>
         <div class="stat">
             <div class="stat-number" id="pending-count">{{ pending|length }}</div>
-            <div class="stat-label">PENDING POST ENGAGEMENT</div>
+            <div class="stat-label">PENDING</div>
+        </div>
+        <div class="stat">
+            <div class="stat-number" id="handled-count">{{ stats.handled_count_unique }}</div>
+            <div class="stat-label">OPPORTUNITIES HANDLED</div>
         </div>
         <div class="stat">
             <div class="stat-number" id="ai-comments">{{ stats.pending_ai_comments }}</div>
-            <div class="stat-label">AI Comments Available</div>
+            <div class="stat-label">AI COMMENTS AVAILABLE</div>
         </div>
     </section>
 
@@ -349,7 +383,7 @@ HTML = """
     </div>
 
     <div class="run-line" style="margin-bottom:8px;">
-        <strong>V5.1:</strong> discovery and AI suggestions only. Instagram actions are always completed manually by the user.
+        <strong>V5.2:</strong> discovery and AI suggestions only. Instagram actions are always completed manually by the user.
     </div>
 
     <div class="run-line">
@@ -368,29 +402,34 @@ HTML = """
             <div class="scan-message">{{ scan_status.message }}</div>
             {% endif %}
         </div>
-        <form method="post" action="/scan">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button id="scan-button" class="scan-button" type="submit" {% if scan_status.status != 'READY' %}disabled{% endif %}>
-                {% if scan_status.status == 'COOLDOWN' %}
-                    🔒 SCAN IN {{ (scan_status.seconds_remaining // 60) }}:{{ '%02d'|format(scan_status.seconds_remaining % 60) }}
-                {% elif scan_status.status == 'PENDING' %}
-                    ⏳ SCAN QUEUED
-                {% elif scan_status.status == 'RUNNING' %}
-                    ⏳ SCAN IN PROGRESS
-                {% else %}
-                    🔎 SCAN FOR MORE
-                {% endif %}
-            </button>
-        </form>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+            <button class="refresh" type="button" onclick="location.reload()">↻ REFRESH DASHBOARD</button>
+            <form method="post" action="/scan" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button id="scan-button" class="scan-button" type="submit" {% if scan_status.status != 'READY' %}disabled{% endif %}>
+                    {% if scan_status.status == 'COOLDOWN' %}
+                        🔒 SCAN IN {{ (scan_status.seconds_remaining // 60) }}:{{ '%02d'|format(scan_status.seconds_remaining % 60) }}
+                    {% elif scan_status.status == 'PENDING' %}
+                        ⏳ SCAN QUEUED
+                    {% elif scan_status.status == 'RUNNING' %}
+                        ⏳ SCAN IN PROGRESS
+                    {% else %}
+                        🔎 SCAN FOR MORE
+                    {% endif %}
+                </button>
+            </form>
+        </div>
     </div>
 
-    <div class="queue-head">
-        <h2>Engagement Opportunities</h2>
-        <span class="pending-pill">{{ pending|length }} pending</span>
-    </div>
+    <section class="platform-section" aria-label="Instagram engagement opportunities">
+        <div class="platform-label">Instagram</div>
+        <div class="queue-head">
+            <h2>Instagram Engagement Opportunities</h2>
+            <span class="pending-pill">{{ pending|length }} pending</span>
+        </div>
 
-    {% if pending %}
-        {% for item in pending %}
+        {% if pending %}
+            {% for item in pending %}
         <div class="card">
             <div class="score">{{ item.best_score }}/100</div>
             <div class="meta"><strong>{% if item.suggested_comment %}LIKE + COMMENT{% else %}LIKE{% endif %}</strong></div>
@@ -427,16 +466,16 @@ HTML = """
         {% endfor %}
     {% else %}
         <div class="empty">No pending engagement opportunities right now.<strong>YOU'RE ALL CAUGHT UP!</strong></div>
-    {% endif %}
+        {% endif %}
+    </section>
 
     <div style="text-align:center; margin-top:18px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-        <button class="refresh" onclick="location.reload()">↻ REFRESH DASHBOARD</button>
         <form method="post" action="/logout" style="display:inline;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button class="refresh" type="submit">LOG OUT</button>
         </form>
     </div>
-    <div class="footer">BEAUTY ROCKET V5.1 — MANUAL REVIEW DASHBOARD</div>
+    <div class="footer">BEAUTY ROCKET V5.2 — MANUAL REVIEW DASHBOARD</div>
 </div>
 
 <script>
@@ -459,6 +498,7 @@ async function refreshStats() {
         const data = await response.json();
         document.getElementById('total-opportunities').innerText = data.total_comment_suggestions;
         document.getElementById('pending-count').innerText = data.pending_count;
+        document.getElementById('handled-count').innerText = data.handled_count_unique || 0;
         document.getElementById('ai-comments').innerText = data.pending_ai_comments || 0;
         document.getElementById('last-run-comments').innerText = '+' + (data.last_run_new_queue_items || 0);
     } catch (e) { /* local dashboard may briefly be unavailable */ }
@@ -759,6 +799,7 @@ def load_stats():
         "last_run_new_queue_items": 0,
         "pending_count_unique": 0,
         "pending_ai_comments": 0,
+        "handled_count_unique": 0,
     }
 
     if DB_ENABLED:
@@ -783,7 +824,8 @@ def load_stats():
                     SELECT
                         COUNT(DISTINCT NULLIF(post_id, '')) AS unique_posts,
                         COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING') AS pending_unique_posts,
-                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING' AND COALESCE(suggested_comment, '') <> '') AS pending_ai_comments
+                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'PENDING' AND COALESCE(suggested_comment, '') <> '') AS pending_ai_comments,
+                        COUNT(DISTINCT NULLIF(post_id, '')) FILTER (WHERE status = 'DONE') AS handled_unique_posts
                     FROM {QUEUE_TABLE}
                 """)
                 counts = dict(cur.fetchone() or {})
@@ -792,6 +834,7 @@ def load_stats():
         data["total_comment_suggestions"] = int(counts.get("unique_posts", 0) or 0)
         data["pending_count_unique"] = int(counts.get("pending_unique_posts", 0) or 0)
         data["pending_ai_comments"] = int(counts.get("pending_ai_comments", 0) or 0)
+        data["handled_count_unique"] = int(counts.get("handled_unique_posts", 0) or 0)
         data["last_run_comment_suggestions"] = int(data.get("last_run_comment_suggestions", 0) or 0)
         data["last_run_new_queue_items"] = int(data.get("last_run_new_queue_items", 0) or 0)
         if data.get("last_run_at_utc"):
