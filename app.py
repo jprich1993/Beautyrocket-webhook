@@ -7,6 +7,7 @@ from flask import Flask, redirect, render_template_string, request, jsonify, sen
 from functools import wraps
 from werkzeug.security import check_password_hash
 import secrets
+import hmac
 
 # PostgreSQL is the cloud persistence layer. The JSON fallback keeps the app
 # usable locally when DATABASE_URL is not configured.
@@ -38,6 +39,8 @@ if DATABASE_URL.startswith("postgres://"):
 QUEUE_TABLE = "beautyrocket_dashboard_queue"
 STATS_TABLE = "beautyrocket_dashboard_stats"
 EXECUTION_TABLE = "beautyrocket_execution_jobs"
+SCAN_TABLE = "beautyrocket_scan_requests"
+MANUAL_SCAN_COOLDOWN_MINUTES = 30
 
 app = Flask(__name__)
 
@@ -80,7 +83,7 @@ LOGIN_HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beautyrocket — Login</title>
+<title>Beauty Rocket — Login</title>
 <style>
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -158,7 +161,7 @@ LOGIN_HTML = """
 </head>
 <body>
 <div class="card">
-    <h1 class="brand">Beautyrocket</h1>
+    <h1 class="brand">Beauty Rocket</h1>
     <div class="subtitle">SECURE DASHBOARD LOGIN</div>
     <form method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -180,7 +183,7 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beautyrocket — Manual Review Dashboard</title>
+<title>Beauty Rocket — Manual Review Dashboard</title>
 <style>
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -204,6 +207,35 @@ HTML = """
     .brand { font-family: Georgia, 'Times New Roman', serif; font-size: clamp(38px, 8vw, 64px); line-height: .95; margin: 0; color: #18232c; letter-spacing: -1px; }
     .title { margin: 9px 0 4px; font-size: 14px; letter-spacing: 5px; color: #26333b; font-weight: 700; }
     .tagline { margin: 0; color: #9a7e7e; font-size: 12px; letter-spacing: 3px; }
+
+    .scan-panel {
+        background: rgba(255,255,255,.86);
+        border: 1px solid rgba(255,255,255,.88);
+        border-radius: 18px;
+        padding: 14px 16px;
+        margin: 14px 0 18px;
+        box-shadow: 0 8px 28px rgba(91,64,57,.08);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
+    }
+    .scan-copy { color: #625b5b; font-size: 13px; line-height: 1.45; }
+    .scan-copy strong { color: #26333b; }
+    .scan-button {
+        border: 0;
+        border-radius: 13px;
+        padding: 13px 17px;
+        font-size: 13px;
+        font-weight: 900;
+        cursor: pointer;
+        background: #cfeeda;
+        color: #155b2b;
+        white-space: nowrap;
+    }
+    .scan-button:disabled { background: #e7e2e2; color: #777; cursor: not-allowed; }
+    .scan-message { margin-top: 6px; font-size: 12px; color: #7d3543; font-weight: 700; }
 
     .review-warning {
         background: rgba(255, 247, 220, .96);
@@ -289,7 +321,7 @@ HTML = """
 <body>
 <div class="wrap">
     <header class="header">
-        <h1 class="brand">Beautyrocket</h1>
+        <h1 class="brand">Beauty Rocket</h1>
         <div class="title">COMMENT AND LIKE REVIEW</div>
         <div class="tagline">DISCOVER · ENGAGE · GROW</div>
     </header>
@@ -317,13 +349,39 @@ HTML = """
     </div>
 
     <div class="run-line" style="margin-bottom:8px;">
-        <strong>V5.0:</strong> discovery and AI suggestions only. Instagram actions are always completed manually by the user.
+        <strong>V5.1:</strong> discovery and AI suggestions only. Instagram actions are always completed manually by the user.
     </div>
 
     <div class="run-line">
         Last discovery: <strong id="last-run-comments">+{{ stats.last_run_new_queue_items }}</strong> new opportunities ·
         <strong>user decides</strong> like / comment / both / neither
         {% if stats.last_run_at_utc %} · {{ stats.last_run_at_utc[:19].replace('T', ' ') }} UTC{% endif %}
+    </div>
+    <div class="scan-panel">
+        <div class="scan-copy">
+            <strong>Need more opportunities?</strong><br>
+            Your normal automated discovery schedule remains <strong>5 scans per day</strong>.
+            Manual scans are limited to one every <strong>30 minutes</strong> per client.
+            {% if scan_status.status == 'READY' %}
+            <div class="scan-message" style="color:#155b2b;">Ready to scan.</div>
+            {% else %}
+            <div class="scan-message">{{ scan_status.message }}</div>
+            {% endif %}
+        </div>
+        <form method="post" action="/scan">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button id="scan-button" class="scan-button" type="submit" {% if scan_status.status != 'READY' %}disabled{% endif %}>
+                {% if scan_status.status == 'COOLDOWN' %}
+                    🔒 SCAN IN {{ (scan_status.seconds_remaining // 60) }}:{{ '%02d'|format(scan_status.seconds_remaining % 60) }}
+                {% elif scan_status.status == 'PENDING' %}
+                    ⏳ SCAN QUEUED
+                {% elif scan_status.status == 'RUNNING' %}
+                    ⏳ SCAN IN PROGRESS
+                {% else %}
+                    🔎 SCAN FOR MORE
+                {% endif %}
+            </button>
+        </form>
     </div>
 
     <div class="queue-head">
@@ -378,7 +436,7 @@ HTML = """
             <button class="refresh" type="submit">LOG OUT</button>
         </form>
     </div>
-    <div class="footer">BEAUTYROCKET V5.0 — MANUAL REVIEW DASHBOARD</div>
+    <div class="footer">BEAUTY ROCKET V5.1 — MANUAL REVIEW DASHBOARD</div>
 </div>
 
 <script>
@@ -490,6 +548,26 @@ def init_db():
             # V4.7 execution jobs are separate from the V4.6 discovery queue.
             # This keeps discovery one-way while giving the Windows executor a
             # small, auditable job queue. No Instagram credentials are stored.
+            # V5.1 manual scan requests. This is discovery control only; it never
+            # performs Instagram engagement actions.
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {SCAN_TABLE} (
+                    request_id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    requested_at_utc TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    started_at_utc TIMESTAMPTZ,
+                    completed_at_utc TIMESTAMPTZ,
+                    new_items INTEGER NOT NULL DEFAULT 0,
+                    error TEXT
+                )
+            """)
+
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{SCAN_TABLE}_status_requested
+                ON {SCAN_TABLE} (status, requested_at_utc ASC)
+            """)
+
             cur.execute(f"""
                 CREATE TABLE IF NOT EXISTS {EXECUTION_TABLE} (
                     job_id TEXT PRIMARY KEY,
@@ -895,15 +973,131 @@ def logout():
     return redirect(url_for("login"))
 
 
+def _scan_status_for_client(client_id):
+    """Return the client's manual-scan state and remaining cooldown."""
+    now = datetime.now(timezone.utc)
+    default = {
+        "status": "READY",
+        "request_id": None,
+        "available_at_utc": None,
+        "seconds_remaining": 0,
+        "message": "Ready for a manual discovery scan.",
+    }
+
+    if not DB_ENABLED:
+        return default
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT request_id, status, requested_at_utc, started_at_utc,
+                       completed_at_utc, new_items, error
+                FROM {SCAN_TABLE}
+                WHERE client_id=%s
+                  AND status IN ('PENDING','RUNNING')
+                ORDER BY requested_at_utc DESC
+                LIMIT 1
+            """, (client_id,))
+            active = cur.fetchone()
+
+            if active:
+                status = str(active["status"])
+                message = "Scan request queued." if status == "PENDING" else "Scan in progress..."
+                return {
+                    "status": status,
+                    "request_id": active["request_id"],
+                    "available_at_utc": None,
+                    "seconds_remaining": 0,
+                    "message": message,
+                }
+
+            cur.execute(f"""
+                SELECT completed_at_utc
+                FROM {SCAN_TABLE}
+                WHERE client_id=%s AND status='COMPLETED'
+                ORDER BY completed_at_utc DESC
+                LIMIT 1
+            """, (client_id,))
+            last = cur.fetchone()
+
+    if last and last["completed_at_utc"]:
+        available = last["completed_at_utc"] + __import__("datetime").timedelta(minutes=MANUAL_SCAN_COOLDOWN_MINUTES)
+        remaining = max(0, int((available - now).total_seconds()))
+        if remaining > 0:
+            return {
+                "status": "COOLDOWN",
+                "request_id": None,
+                "available_at_utc": available.isoformat(),
+                "seconds_remaining": remaining,
+                "message": "Manual scan cooldown is active.",
+            }
+
+    return default
+
+
+def request_manual_scan(client_id):
+    """Create one manual discovery request, enforcing a 30-minute client cooldown."""
+    if not DB_ENABLED:
+        return None, "database_not_configured", None
+
+    now = datetime.now(timezone.utc)
+    cooldown = __import__("datetime").timedelta(minutes=MANUAL_SCAN_COOLDOWN_MINUTES)
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            # One active request per client.
+            cur.execute(f"""
+                SELECT request_id, status
+                FROM {SCAN_TABLE}
+                WHERE client_id=%s AND status IN ('PENDING','RUNNING')
+                ORDER BY requested_at_utc DESC
+                LIMIT 1
+            """, (client_id,))
+            active = cur.fetchone()
+            if active:
+                conn.commit()
+                return None, "scan_already_active", active["request_id"]
+
+            cur.execute(f"""
+                SELECT completed_at_utc
+                FROM {SCAN_TABLE}
+                WHERE client_id=%s AND status='COMPLETED'
+                ORDER BY completed_at_utc DESC
+                LIMIT 1
+            """, (client_id,))
+            last = cur.fetchone()
+            if last and last["completed_at_utc"]:
+                available = last["completed_at_utc"] + cooldown
+                if available > now:
+                    remaining = max(0, int((available-now).total_seconds()))
+                    conn.commit()
+                    return None, "cooldown", remaining
+
+            request_id = secrets.token_hex(12)
+            cur.execute(f"""
+                INSERT INTO {SCAN_TABLE} (request_id, client_id, status, requested_at_utc)
+                VALUES (%s,%s,'PENDING',%s)
+            """, (request_id, client_id, now))
+        conn.commit()
+    return request_id, None, None
+
+
+def _scan_worker_key_ok(req):
+    supplied = req.headers.get("X-Beautyrocket-Bot-Key", "")
+    return bool(BOT_API_KEY and supplied and hmac.compare_digest(supplied, BOT_API_KEY))
+
+
 @app.get("/")
 @login_required
 def index():
     pending = get_pending()
     stats = load_stats()
+    scan_status = _scan_status_for_client(DEFAULT_CLIENT_ID)
     return render_template_string(
         HTML,
         pending=pending,
         stats=stats,
+        scan_status=scan_status,
         csrf_token=session["csrf_token"],
     )
 
@@ -1031,6 +1225,112 @@ def background():
     return send_file(BACKGROUND_FILE, mimetype="image/png", max_age=3600)
 
 
+
+
+@app.post("/scan")
+@login_required
+def manual_scan():
+    if not valid_csrf(request.form.get("csrf_token")):
+        return ("Invalid request.", 400)
+
+    request_id, error, detail = request_manual_scan(DEFAULT_CLIENT_ID)
+    if error == "database_not_configured":
+        return ("Manual scanning is temporarily unavailable because the dashboard database is not configured.", 503)
+    if error == "cooldown":
+        return redirect(url_for("index"))
+    if error == "scan_already_active":
+        return redirect(url_for("index"))
+
+    return redirect(url_for("index"))
+
+
+@app.get("/api/scan/next")
+def api_scan_next():
+    """Claim the oldest pending manual discovery request for the local discovery worker."""
+    if not _scan_worker_key_ok(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+
+    now = datetime.now(timezone.utc)
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            # Global single-worker guard: never run two discovery scans simultaneously.
+            cur.execute(f"""
+                SELECT request_id FROM {SCAN_TABLE}
+                WHERE status='RUNNING'
+                ORDER BY started_at_utc ASC
+                LIMIT 1
+            """)
+            running = cur.fetchone()
+            if running:
+                conn.commit()
+                return jsonify({"ok": True, "request": None, "busy": True})
+
+            cur.execute(f"""
+                SELECT request_id, client_id, requested_at_utc
+                FROM {SCAN_TABLE}
+                WHERE status='PENDING'
+                ORDER BY requested_at_utc ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            """)
+            row = cur.fetchone()
+            if not row:
+                conn.commit()
+                return jsonify({"ok": True, "request": None, "busy": False})
+
+            cur.execute(f"""
+                UPDATE {SCAN_TABLE}
+                SET status='RUNNING', started_at_utc=%s
+                WHERE request_id=%s
+            """, (now, row["request_id"]))
+        conn.commit()
+
+    return jsonify({
+        "ok": True,
+        "busy": False,
+        "request": {
+            "request_id": row["request_id"],
+            "client_id": row["client_id"],
+            "requested_at_utc": row["requested_at_utc"].isoformat() if row["requested_at_utc"] else None,
+        },
+    })
+
+
+@app.post("/api/scan/result")
+def api_scan_result():
+    """Complete a claimed manual discovery request; never performs Instagram actions."""
+    if not _scan_worker_key_ok(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "application/json_required"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    request_id = str(payload.get("request_id") or "").strip()
+    success = bool(payload.get("success"))
+    new_items = max(0, int(payload.get("new_items") or 0))
+    error = str(payload.get("error") or "").strip()[:2000]
+    if not request_id:
+        return jsonify({"ok": False, "error": "request_id_required"}), 400
+
+    now = datetime.now(timezone.utc)
+    status = "COMPLETED" if success else "FAILED"
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE {SCAN_TABLE}
+                SET status=%s, completed_at_utc=%s, new_items=%s, error=%s
+                WHERE request_id=%s AND status='RUNNING'
+            """, (status, now, new_items, error or None, request_id))
+            changed = cur.rowcount > 0
+        conn.commit()
+
+    if not changed:
+        return jsonify({"ok": False, "error": "request_not_running_or_not_found"}), 409
+    return jsonify({"ok": True, "status": status, "new_items": new_items})
 
 
 @app.post("/done/<queue_id>")
