@@ -1086,13 +1086,11 @@ def set_queue_status(queue_id, status):
         with _db_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    UPDATE {QUEUE_TABLE} q
+                    UPDATE {QUEUE_TABLE}
                     SET status = %s,
                         completed_at_utc = %s
-                    WHERE q.post_id = (
-                        SELECT post_id FROM {QUEUE_TABLE} WHERE queue_id = %s
-                    )
-                      AND q.status = 'PENDING'
+                    WHERE queue_id = %s
+                      AND status = 'PENDING'
                 """, (status, completed_at, queue_id))
                 changed = cur.rowcount > 0
             conn.commit()
@@ -1183,6 +1181,59 @@ def stats():
     data["pending_count"] = len(get_pending())
     return jsonify(data)
 
+
+
+@app.get("/api/diagnostic/queue")
+def diagnostic_queue():
+    """Read-only queue diagnostic for the Windows execution agent.
+
+    This endpoint never mutates queue or execution state. It is protected by
+    the execution-agent API key so it can be queried from PowerShell without
+    exposing dashboard credentials.
+    """
+    supplied_key = request.headers.get("X-Beautyrocket-Execution-Key", "")
+    if not supplied_key or not EXECUTION_AGENT_API_KEY or not hmac.compare_digest(supplied_key, EXECUTION_AGENT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    q.queue_id, q.created_at_utc, q.status, q.post_id, q.permalink,
+                    q.buyer_score, q.follower_score, q.best_score, q.target_action,
+                    q.suggested_comment, q.completed_at_utc,
+                    e.job_id, e.status AS execution_status, e.execution_attempts,
+                    e.execution_result, e.execution_error, e.created_at_utc AS execution_created_at_utc
+                FROM {QUEUE_TABLE} q
+                LEFT JOIN {EXECUTION_TABLE} e ON e.queue_id = q.queue_id
+                ORDER BY q.created_at_utc DESC NULLS LAST
+                LIMIT 250
+            """)
+            rows = cur.fetchall()
+
+    items = []
+    status_counts = {}
+    for row in rows:
+        item = dict(row)
+        for key in ("created_at_utc", "completed_at_utc", "execution_created_at_utc"):
+            if item.get(key):
+                item[key] = item[key].isoformat()
+        items.append(item)
+        status = str(item.get("status") or "UNKNOWN")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    pending = [x for x in items if x.get("status") == "PENDING"]
+    return jsonify({
+        "ok": True,
+        "queue_rows_returned": len(items),
+        "status_counts": status_counts,
+        "dashboard_pending_count": len(get_pending()),
+        "pending_rows": pending,
+        "all_rows": items,
+    })
 
 
 @app.post("/api/ingest")
