@@ -323,6 +323,14 @@ HTML = """
     .score { font-size: 34px; font-weight: 800; color: #c86d7c; }
     .meta { color: #625b5b; font-size: 13px; line-height: 1.55; }
     .comment { background: rgba(245,244,244,.9); border-radius: 14px; padding: 15px; margin: 15px 0; line-height: 1.5; white-space: pre-wrap; font-size: 16px; }
+    .comment-label { color: #7d3543; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-top: 14px; }
+    .comment-editor { width: 100%; min-height: 105px; resize: vertical; border: 1px solid rgba(198,111,124,.28); border-radius: 14px; padding: 14px; margin: 8px 0 10px; box-sizing: border-box; font: inherit; line-height: 1.5; background: rgba(255,255,255,.92); color: #222; }
+    .edit-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .save-edit { background: #e9d7f7; color: #51306b; border: 0; border-radius: 12px; padding: 10px 13px; font-size: 12px; font-weight: 900; cursor: pointer; }
+    .edit-note { color: #746a6a; font-size: 11px; }
+    .thread-root { background: rgba(248,238,230,.72); border-radius: 13px; padding: 12px; margin-top: 12px; color: #4f4545; line-height: 1.45; }
+    .thread-signal { background: rgba(239,245,249,.78); border-radius: 13px; padding: 12px; margin-top: 10px; color: #42505a; line-height: 1.45; }
+    .threads-pill { background: #dcecf4; color: #31576b; }
     .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
     button, a.btn { display: block; width: 100%; box-sizing: border-box; border: 0; border-radius: 13px; padding: 14px 10px; font-size: 14px; font-weight: 800; text-align: center; text-decoration: none; cursor: pointer; }
     .copy { background: #20262b; color: white; }
@@ -383,7 +391,7 @@ HTML = """
     </div>
 
     <div class="run-line" style="margin-bottom:8px;">
-        <strong>V5.2:</strong> discovery and AI suggestions only. Instagram actions are always completed manually by the user.
+        <strong>V5.3:</strong> Instagram + Threads discovery and AI suggestions only. Instagram actions are always completed manually by the user.
     </div>
 
     <div class="run-line">
@@ -428,8 +436,8 @@ HTML = """
             <span class="pending-pill">{{ pending|length }} pending</span>
         </div>
 
-        {% if pending %}
-            {% for item in pending %}
+        {% if instagram_pending %}
+            {% for item in instagram_pending %}
         <div class="card">
             <div class="score">{{ item.best_score }}/100</div>
             <div class="meta"><strong>{% if item.suggested_comment %}LIKE + COMMENT{% else %}LIKE{% endif %}</strong></div>
@@ -440,8 +448,16 @@ HTML = """
             <div class="meta">Category: {{ item.categories|join(', ') }}</div>
 
             {% if item.suggested_comment %}
-            <div class="comment-label">AI SUGGESTED COMMENT — USE, EDIT, OR IGNORE</div>
-            <div class="comment" id="comment-{{ item.queue_id }}">{{ item.suggested_comment }}</div>
+            <div class="comment-label">AI SUGGESTED COMMENT — EDIT OPTIONAL</div>
+            <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested comment">{{ item.suggested_comment }}</textarea>
+            <div class="edit-row">
+                <form method="post" action="/edit-comment/{{ item.queue_id }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="comment" id="save-comment-{{ item.queue_id }}">
+                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">💾 SAVE EDIT</button>
+                </form>
+                <span class="edit-note">Leave it unchanged if the AI suggestion already fits.</span>
+            </div>
             {% else %}
             <div class="comment-label">NO AI COMMENT AVAILABLE — USER MAY WRITE THEIR OWN</div>
             {% endif %}
@@ -465,9 +481,54 @@ HTML = """
         </div>
         {% endfor %}
     {% else %}
-        <div class="empty">No pending engagement opportunities right now.<strong>YOU'RE ALL CAUGHT UP!</strong></div>
+        <div class="empty">No pending Instagram opportunities right now.</div>
         {% endif %}
     </section>
+
+    {% if threads_pending %}
+    <section class="platform-section" aria-label="Threads engagement opportunities">
+        <div class="platform-label">Threads <span class="threads-pill">{{ threads_pending|length }} pending</span></div>
+        <div class="queue-head">
+            <h2>Threads Engagement Opportunities</h2>
+            <span class="pending-pill">{{ threads_pending|length }} pending</span>
+        </div>
+        {% for item in threads_pending %}
+        <div class="card">
+            <div class="score">{{ item.best_score }}/100</div>
+            <div class="meta"><strong>THREADS · HUMAN REVIEW</strong></div>
+            <div class="meta"><strong>@{{ item.discovery_signal_username or item.username or item.root_username or 'unknown' }}</strong> · Follower/community opportunity</div>
+            <div class="meta">Category: {{ item.categories|join(', ') }}</div>
+            {% if item.root_text %}<div class="thread-root"><strong>Root:</strong> {{ item.root_text[:500] }}{% if item.root_text|length > 500 %}…{% endif %}</div>{% endif %}
+            {% if item.discovery_signal_text %}<div class="thread-signal"><strong>Conversation signal:</strong><br>{{ item.discovery_signal_text[:700] }}{% if item.discovery_signal_text|length > 700 %}…{% endif %}</div>{% endif %}
+            {% if item.suggested_comment %}
+            <div class="comment-label">AI SUGGESTED RESPONSE — EDIT OPTIONAL</div>
+            <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested Threads response">{{ item.suggested_comment }}</textarea>
+            <div class="edit-row">
+                <form method="post" action="/edit-comment/{{ item.queue_id }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="comment" id="save-comment-{{ item.queue_id }}">
+                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">💾 SAVE EDIT</button>
+                </form>
+                <span class="edit-note">Editing is optional. You can copy the AI response as-is.</span>
+            </div>
+            {% else %}
+            <div class="comment-label">NO AI RESPONSE AVAILABLE — USER MAY WRITE THEIR OWN</div>
+            <textarea class="comment-editor" id="comment-{{ item.queue_id }}" placeholder="Optional: write a response here before copying."></textarea>
+            {% endif %}
+            <div class="buttons">
+                <button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">📋 COPY RESPONSE</button>
+                <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">↗ OPEN THREAD</a>
+                <form method="post" action="/done/{{ item.queue_id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="done" type="submit">✓ DONE — ENGAGEMENT HANDLED</button></form>
+                <form method="post" action="/skip/{{ item.queue_id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="skip" type="submit">SKIP — NOT USING</button></form>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if not instagram_pending and not threads_pending %}
+        <div class="empty">No pending engagement opportunities right now.<strong>YOU'RE ALL CAUGHT UP!</strong></div>
+    {% endif %}
 
     <div style="text-align:center; margin-top:18px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
         <form method="post" action="/logout" style="display:inline;">
@@ -480,7 +541,8 @@ HTML = """
 
 <script>
 async function copyComment(id, button) {
-    const text = document.getElementById(id).innerText;
+    const element = document.getElementById(id);
+    const text = ('value' in element) ? element.value : element.innerText;
     try {
         await navigator.clipboard.writeText(text);
         const old = button.innerText;
@@ -1134,11 +1196,15 @@ def _scan_worker_key_ok(req):
 @login_required
 def index():
     pending = get_pending()
+    instagram_pending = [x for x in pending if str(x.get("platform", "INSTAGRAM")).upper() != "THREADS"]
+    threads_pending = [x for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "THREADS"]
     stats = load_stats()
     scan_status = _scan_status_for_client(DEFAULT_CLIENT_ID)
     return render_template_string(
         HTML,
         pending=pending,
+        instagram_pending=instagram_pending,
+        threads_pending=threads_pending,
         stats=stats,
         scan_status=scan_status,
         csrf_token=session["csrf_token"],
@@ -1149,7 +1215,10 @@ def index():
 @login_required
 def stats():
     data = load_stats()
-    data["pending_count"] = len(get_pending())
+    pending = get_pending()
+    data["pending_count"] = len(pending)
+    data["pending_instagram"] = sum(1 for x in pending if str(x.get("platform", "INSTAGRAM")).upper() != "THREADS")
+    data["pending_threads"] = sum(1 for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "THREADS")
     return jsonify(data)
 
 
@@ -1244,6 +1313,64 @@ def api_ingest():
         "queue_items_blocked_as_duplicate": blocked,
         "stats_saved": stats is not None,
     })
+
+
+@app.post("/threads/discovery/sync")
+def threads_discovery_sync():
+    """Receive selected Threads opportunities from the V2 discovery worker."""
+    if not BOT_API_KEY:
+        return jsonify({"ok": False, "error": "bot_api_not_configured"}), 503
+    supplied = request.headers.get("X-API-Key", "") or request.headers.get("X-Beautyrocket-Bot-Key", "") or request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if not supplied or not hmac.compare_digest(supplied, BOT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "application/json_required"}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "json_object_required"}), 400
+    items = payload.get("items", [])
+    if not isinstance(items, list) or len(items) > 7:
+        return jsonify({"ok": False, "error": "items_must_be_list_max_7"}), 400
+    accepted = blocked = 0
+    for item in items:
+        if not isinstance(item, dict) or not str(item.get("root_post_id", "")).strip():
+            return jsonify({"ok": False, "error": "invalid_threads_item"}), 400
+        suggested = item.get("suggested_comment") or item.get("suggested_response") or ""
+        root_id = str(item.get("root_post_id")).strip()
+        queue_item = {
+            "queue_id": item.get("canonical_key") or f"THREADS:{root_id}", "platform": "THREADS", "status": "PENDING",
+            "post_id": root_id, "permalink": item.get("discovery_signal_permalink") or item.get("root_permalink"),
+            "buyer_score": 0, "buyer_band": "NOT_APPLICABLE",
+            "follower_score": int(item.get("normalized_score", 0) or 0), "follower_band": item.get("dashboard_band", "REVIEW"),
+            "best_score": int(item.get("normalized_score", 0) or 0), "target_action": "COMMENT", "account_type": "THREADS",
+            "categories": item.get("categories", []), "safety_pass": item.get("safety") == "PASS",
+            "suggested_comment": suggested, "caption": item.get("root_text", ""), "writer_source": "THREADS_DISCOVERY",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(), "raw_data": item,
+        }
+        if upsert_queue_item(queue_item): accepted += 1
+        else: blocked += 1
+    return jsonify({"ok": True, "queue_items_accepted": accepted, "queue_items_blocked_as_duplicate": blocked, "platform": "THREADS", "script_version": payload.get("script_version")})
+
+
+@app.post("/edit-comment/<queue_id>")
+@login_required
+def edit_comment(queue_id):
+    if not valid_csrf(request.form.get("csrf_token")): return ("Invalid request.", 400)
+    comment = request.form.get("comment", "")
+    if len(comment) > 5000: return ("Comment is too long.", 400)
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE {QUEUE_TABLE} SET suggested_comment=%s, raw_data=jsonb_set(COALESCE(raw_data, '{{}}'::jsonb), '{{dashboard_edited_comment}}', to_jsonb(%s::text), true) WHERE queue_id=%s AND status='PENDING'", (comment, comment, queue_id))
+            conn.commit()
+    else:
+        queue = load_queue()
+        for item in queue:
+            if item.get("queue_id") == queue_id and item.get("status") == "PENDING":
+                item["suggested_comment"] = comment; item["dashboard_edited_comment"] = comment; save_queue(queue); break
+    return redirect(url_for("index"))
 
 
 @app.get("/healthz")
