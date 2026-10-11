@@ -294,6 +294,58 @@ HTML = """
         text-transform: uppercase;
         margin-bottom: 12px;
     }
+    .platform-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        cursor: pointer;
+        list-style: none;
+        font-weight: 900;
+        color: #28343a;
+        padding: 5px 2px;
+    }
+    .platform-toggle::-webkit-details-marker { display: none; }
+    .platform-toggle::after {
+        content: "+";
+        font-size: 22px;
+        line-height: 1;
+        color: #7d3543;
+        margin-left: auto;
+    }
+    details[open] > .platform-toggle::after { content: "-"; }
+    .platform-summary-count {
+        font-size: 12px;
+        font-weight: 800;
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: #f2ccd1;
+        color: #7d3543;
+    }
+    .platform-content { padding-top: 12px; }
+    .youtube-section { border-color: rgba(100, 87, 170, .32); }
+    .youtube-toggle { color: #40356f; }
+    .youtube-toggle::after { color: #6255a4; }
+    .youtube-section .platform-summary-count {
+        background: #e7e2fb;
+        color: #40356f;
+    }
+    .youtube-title { color: #28343a; margin: 8px 0; font-size: 19px; }
+    .youtube-original-label {
+        margin-top: 16px;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: .7px;
+        color: #6255a4;
+    }
+    .youtube-original {
+        margin: 8px 0 14px;
+        padding: 12px 14px;
+        border-left: 3px solid #8b7acb;
+        border-radius: 8px;
+        background: #f7f5ff;
+        color: #34313f;
+    }
     .platform-section .queue-head {
         margin-top: 0;
     }
@@ -390,50 +442,15 @@ HTML = """
         <strong>Only copy the comment and post it yourself when it genuinely fits the visual.</strong>
     </div>
 
-    <div class="run-line" style="margin-bottom:8px;">
-        <strong>V5.3:</strong> Instagram + Threads discovery and AI suggestions only. Instagram actions are always completed manually by the user.
-    </div>
+        Discover and review opportunities across supported platforms. AI suggestions require human review; you decide whether to engage, edit a suggestion, or skip. All engagement actions are completed manually by the user.
 
-    <div class="run-line">
-        Last discovery: <strong id="last-run-comments">+{{ stats.last_run_new_queue_items }}</strong> new opportunities ·
-        <strong>user decides</strong> like / comment / both / neither
-        {% if stats.last_run_at_utc %} · {{ stats.last_run_at_utc[:19].replace('T', ' ') }} UTC{% endif %}
-    </div>
-    <div class="scan-panel">
-        <div class="scan-copy">
-            <strong>Need more opportunities?</strong><br>
-            Your normal automated discovery schedule remains <strong>5 scans per day</strong>.
-            Manual scans are limited to one every <strong>30 minutes</strong> per client.
-            {% if scan_status.status == 'READY' %}
-            <div class="scan-message" style="color:#155b2b;">Ready to scan.</div>
-            {% else %}
-            <div class="scan-message">{{ scan_status.message }}</div>
-            {% endif %}
-        </div>
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-            <button class="refresh" type="button" onclick="location.reload()">↻ REFRESH DASHBOARD</button>
-            <form method="post" action="/scan" style="display:inline;">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button id="scan-button" class="scan-button" type="submit" {% if scan_status.status != 'READY' %}disabled{% endif %}>
-                    {% if scan_status.status == 'COOLDOWN' %}
-                        🔒 SCAN IN {{ (scan_status.seconds_remaining // 60) }}:{{ '%02d'|format(scan_status.seconds_remaining % 60) }}
-                    {% elif scan_status.status == 'PENDING' %}
-                        ⏳ SCAN QUEUED
-                    {% elif scan_status.status == 'RUNNING' %}
-                        ⏳ SCAN IN PROGRESS
-                    {% else %}
-                        🔎 SCAN FOR MORE
-                    {% endif %}
-                </button>
-            </form>
-        </div>
-    </div>
-
-    <section class="platform-section" aria-label="Instagram engagement opportunities">
+    <details class="platform-section" aria-label="Instagram engagement opportunities" open>
+        <summary class="platform-toggle"><span>Instagram</span><span class="platform-summary-count">{{ instagram_pending|length }} pending</span></summary>
+        <div class="platform-content">
         <div class="platform-label">Instagram</div>
         <div class="queue-head">
             <h2>Instagram Engagement Opportunities</h2>
-            <span class="pending-pill">{{ pending|length }} pending</span>
+            <span class="pending-pill">{{ instagram_pending|length }} pending</span>
         </div>
 
         {% if instagram_pending %}
@@ -483,52 +500,61 @@ HTML = """
     {% else %}
         <div class="empty">No pending Instagram opportunities right now.</div>
         {% endif %}
-    </section>
-
-    {% if threads_pending %}
-    <section class="platform-section" aria-label="Threads engagement opportunities">
-        <div class="platform-label">Threads <span class="threads-pill">{{ threads_pending|length }} pending</span></div>
-        <div class="queue-head">
-            <h2>Threads Engagement Opportunities</h2>
-            <span class="pending-pill">{{ threads_pending|length }} pending</span>
         </div>
-        {% for item in threads_pending %}
-        <div class="card">
-            <div class="score">{{ item.best_score }}/100</div>
-            <div class="meta"><strong>THREADS · HUMAN REVIEW</strong></div>
-            <div class="meta"><strong>@{{ item.discovery_signal_username or item.username or item.root_username or 'unknown' }}</strong> · Follower/community opportunity</div>
-            <div class="meta">Category: {{ item.categories|join(', ') }}</div>
-            {% if item.root_text %}<div class="thread-root"><strong>Root:</strong> {{ item.root_text[:500] }}{% if item.root_text|length > 500 %}…{% endif %}</div>{% endif %}
-            {% if item.discovery_signal_text %}<div class="thread-signal"><strong>Conversation signal:</strong><br>{{ item.discovery_signal_text[:700] }}{% if item.discovery_signal_text|length > 700 %}…{% endif %}</div>{% endif %}
-            {% if item.suggested_comment %}
-            <div class="comment-label">AI SUGGESTED RESPONSE — EDIT OPTIONAL</div>
-            <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested Threads response">{{ item.suggested_comment }}</textarea>
-            <div class="edit-row">
-                <form method="post" action="/edit-comment/{{ item.queue_id }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="comment" id="save-comment-{{ item.queue_id }}">
-                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">💾 SAVE EDIT</button>
-                </form>
-                <span class="edit-note">Editing is optional. You can copy the AI response as-is.</span>
+    </details>
+
+    <details class="platform-section youtube-section" aria-label="YouTube engagement opportunities" open>
+        <summary class="platform-toggle youtube-toggle"><span>YouTube</span><span class="platform-summary-count">{{ youtube_pending|length }} pending</span></summary>
+        <div class="platform-content">
+            <div class="queue-head">
+                <h2>YouTube Engagement Opportunities</h2>
+                <span class="pending-pill">{{ youtube_pending|length }} pending</span>
             </div>
+
+            {% if youtube_pending %}
+                {% for item in youtube_pending %}
+            <div class="card youtube-card">
+                <div class="meta"><strong>POTENTIAL BUYER</strong></div>
+                <h3 class="youtube-title">{{ item.video_title or 'YouTube video' }}</h3>
+                <div class="meta">Channel: {{ item.channel_name or 'Unknown channel' }}</div>
+                <div class="meta">Commenter: {{ item.commenter or 'YouTube user' }}</div>
+                <div class="youtube-original-label">ORIGINAL COMMENT</div>
+                <blockquote class="youtube-original">{{ item.original_comment or 'No original comment available.' }}</blockquote>
+
+                {% if item.suggested_comment %}
+                <div class="comment-label">AI SUGGESTED COMMENT — EDIT OPTIONAL</div>
+                <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested comment">{{ item.suggested_comment }}</textarea>
+                <div class="edit-row">
+                    <form method="post" action="/edit-comment/{{ item.queue_id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="comment" id="save-comment-{{ item.queue_id }}">
+                        <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">SAVE EDIT</button>
+                    </form>
+                    <span class="edit-note">Review and edit before using.</span>
+                </div>
+                {% else %}
+                <div class="comment-label">NO AI COMMENT AVAILABLE ? WRITE YOUR OWN IF APPROPRIATE</div>
+                {% endif %}
+
+                <div class="buttons">
+                    {% if item.suggested_comment %}<button class="copy" type="button" onclick="copyComment('comment-{{ item.queue_id }}', this)">COPY AI COMMENT</button>{% endif %}
+                    <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener noreferrer">OPEN COMMENT</a>
+                    <form method="post" action="/done/{{ item.queue_id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="done" type="submit">DONE — ENGAGEMENT HANDLED</button>
+                    </form>
+                    <form method="post" action="/skip/{{ item.queue_id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="skip" type="submit">SKIP — NOT USING</button>
+                    </form>
+                </div>
+            </div>
+                {% endfor %}
             {% else %}
-            <div class="comment-label">NO AI RESPONSE AVAILABLE — USER MAY WRITE THEIR OWN</div>
-            <textarea class="comment-editor" id="comment-{{ item.queue_id }}" placeholder="Optional: write a response here before copying."></textarea>
+            <div class="empty">No pending YouTube opportunities right now.</div>
             {% endif %}
-            <div class="buttons">
-                <button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">📋 COPY RESPONSE</button>
-                <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">↗ OPEN THREAD</a>
-                <form method="post" action="/done/{{ item.queue_id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="done" type="submit">✓ DONE — ENGAGEMENT HANDLED</button></form>
-                <form method="post" action="/skip/{{ item.queue_id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="skip" type="submit">SKIP — NOT USING</button></form>
-            </div>
         </div>
-        {% endfor %}
-    </section>
-    {% endif %}
-
-    {% if not instagram_pending and not threads_pending %}
-        <div class="empty">No pending engagement opportunities right now.<strong>YOU'RE ALL CAUGHT UP!</strong></div>
-    {% endif %}
+    </details>
 
     <div style="text-align:center; margin-top:18px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
         <form method="post" action="/logout" style="display:inline;">
@@ -562,7 +588,7 @@ async function refreshStats() {
         document.getElementById('pending-count').innerText = data.pending_count;
         document.getElementById('handled-count').innerText = data.handled_count_unique || 0;
         document.getElementById('ai-comments').innerText = data.pending_ai_comments || 0;
-        document.getElementById('last-run-comments').innerText = '+' + (data.last_run_new_queue_items || 0);
+        const lastRunElement = document.getElementById('last-run-comments'); if (lastRunElement) lastRunElement.innerText = '+' + (data.last_run_new_queue_items || 0);
     } catch (e) { /* local dashboard may briefly be unavailable */ }
 }
 setInterval(refreshStats, 10000);
@@ -1010,9 +1036,7 @@ def set_queue_status(queue_id, status):
                     UPDATE {QUEUE_TABLE} q
                     SET status = %s,
                         completed_at_utc = %s
-                    WHERE q.post_id = (
-                        SELECT post_id FROM {QUEUE_TABLE} WHERE queue_id = %s
-                    )
+                    WHERE q.queue_id = %s
                       AND q.status = 'PENDING'
                 """, (status, completed_at, queue_id))
                 changed = cur.rowcount > 0
@@ -1196,15 +1220,16 @@ def _scan_worker_key_ok(req):
 @login_required
 def index():
     pending = get_pending()
-    instagram_pending = [x for x in pending if str(x.get("platform", "INSTAGRAM")).upper() != "THREADS"]
-    threads_pending = [x for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "THREADS"]
+    instagram_pending = [x for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "INSTAGRAM"]
+    youtube_pending = [x for x in pending if str(x.get("platform", "")).upper() == "YOUTUBE"]
     stats = load_stats()
     scan_status = _scan_status_for_client(DEFAULT_CLIENT_ID)
     return render_template_string(
         HTML,
         pending=pending,
         instagram_pending=instagram_pending,
-        threads_pending=threads_pending,
+        youtube_pending=youtube_pending,
+
         stats=stats,
         scan_status=scan_status,
         csrf_token=session["csrf_token"],
@@ -1217,8 +1242,8 @@ def stats():
     data = load_stats()
     pending = get_pending()
     data["pending_count"] = len(pending)
-    data["pending_instagram"] = sum(1 for x in pending if str(x.get("platform", "INSTAGRAM")).upper() != "THREADS")
-    data["pending_threads"] = sum(1 for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "THREADS")
+    data["pending_instagram"] = sum(1 for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "INSTAGRAM")
+    data["pending_youtube"] = sum(1 for x in pending if str(x.get("platform", "")).upper() == "YOUTUBE")
     return jsonify(data)
 
 
