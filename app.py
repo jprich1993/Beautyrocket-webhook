@@ -514,12 +514,17 @@ HTML = """
             {% if youtube_pending %}
                 {% for item in youtube_pending %}
             <div class="card youtube-card">
-                <div class="meta"><strong>POTENTIAL BUYER</strong></div>
+                <div class="meta"><strong>{{ "ENGAGEMENT" if item.get("workflow_type") == "AUDIENCE_GROWTH" else "POTENTIAL BUYER" }}</strong></div>
                 <h3 class="youtube-title">{{ item.video_title or 'YouTube video' }}</h3>
                 <div class="meta">Channel: {{ item.channel_name or 'Unknown channel' }}</div>
                 <div class="meta">Commenter: {{ item.commenter or 'YouTube user' }}</div>
+                {% if item.get("workflow_type") == "AUDIENCE_GROWTH" %}
+                <div class="youtube-original-label">ENGAGEMENT CONTEXT</div>
+                <blockquote class="youtube-original">{{ item.original_comment or "Review the video and personalize this draft before using it." }}</blockquote>
+                {% else %}
                 <div class="youtube-original-label">ORIGINAL COMMENT</div>
                 <blockquote class="youtube-original">{{ item.original_comment or 'No original comment available.' }}</blockquote>
+                {% endif %}
 
                 {% if item.suggested_comment %}
                 <div class="comment-label">AI SUGGESTED COMMENT — EDIT OPTIONAL</div>
@@ -538,7 +543,7 @@ HTML = """
 
                 <div class="buttons">
                     {% if item.suggested_comment %}<button class="copy" type="button" onclick="copyComment('comment-{{ item.queue_id }}', this)">COPY AI COMMENT</button>{% endif %}
-                    <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener noreferrer">OPEN COMMENT</a>
+                    <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener noreferrer">{{ "OPEN VIDEO" if item.get("workflow_type") == "AUDIENCE_GROWTH" else "OPEN COMMENT" }}</a>
                     <form method="post" action="/done/{{ item.queue_id }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button class="done" type="submit">DONE — ENGAGEMENT HANDLED</button>
