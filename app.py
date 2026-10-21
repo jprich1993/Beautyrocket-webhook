@@ -1345,6 +1345,49 @@ def api_ingest():
     })
 
 
+@app.get("/api/youtube-growth/existing-video-ids")
+def youtube_growth_existing_video_ids():
+    """Return all video IDs already represented in the growth queue."""
+    if not BOT_API_KEY:
+        return jsonify({"ok": False, "error": "bot_api_not_configured"}), 503
+
+    supplied = (
+        request.headers.get("X-Beautyrocket-Bot-Key", "")
+        or request.headers.get("X-API-Key", "")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ")
+    )
+    if not supplied or not hmac.compare_digest(supplied, BOT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT DISTINCT COALESCE(
+                        NULLIF(raw_data->>'video_id', ''),
+                        CASE WHEN post_id LIKE 'YOUTUBE:GROWTH:%'
+                             THEN substring(post_id from 16) END,
+                        CASE WHEN queue_id LIKE 'YOUTUBE:GROWTH:%'
+                             THEN substring(queue_id from 16) END
+                    ) AS video_id
+                    FROM {QUEUE_TABLE}
+                    WHERE writer_source = 'YOUTUBE_AUDIENCE_GROWTH_V1'
+                       OR raw_data->>'writer_source' = 'YOUTUBE_AUDIENCE_GROWTH_V1'
+                       OR raw_data->>'pipeline_version' = 'YOUTUBE_AUDIENCE_GROWTH_V1'
+                """)
+                rows = cur.fetchall()
+        ids = sorted({
+            str(row["video_id"]).strip()
+            for row in rows
+            if row.get("video_id") and str(row["video_id"]).strip()
+        })
+        return jsonify({"ok": True, "video_ids": ids, "count": len(ids)})
+    except Exception:
+        app.logger.exception("Could not read existing YouTube growth video IDs")
+        return jsonify({"ok": False, "error": "growth_video_lookup_failed"}), 500
+
 @app.post("/threads/discovery/sync")
 def threads_discovery_sync():
     """Receive selected Threads opportunities from the V2 discovery worker."""
