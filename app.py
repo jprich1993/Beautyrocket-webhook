@@ -1237,7 +1237,7 @@ def index():
     pending = get_pending()
     instagram_pending = []
     for item in pending:
-        platform = str(item.get("platform") or item.get("account_type") or "INSTAGRAM").upper()
+        platform = str(item.get("platform") or "INSTAGRAM").upper()
         if platform != "INSTAGRAM":
             continue
         label = instagram_card_label(item)
