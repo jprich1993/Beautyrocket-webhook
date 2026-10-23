@@ -8,6 +8,21 @@ from functools import wraps
 from werkzeug.security import check_password_hash
 import secrets
 import hmac
+import sys
+
+_INSTAGRAM_HELPER_DIR = Path(__file__).resolve().parent / "Instagram" / "Discovery"
+if str(_INSTAGRAM_HELPER_DIR) not in sys.path:
+    sys.path.insert(0, str(_INSTAGRAM_HELPER_DIR))
+
+try:
+    from buyer_product_link import instagram_card_label
+except Exception:
+    # Fail closed for buyer qualification if the helper is unavailable.
+    def instagram_card_label(item):
+        try:
+            return "Engagement" if int(item.get("follower_score", 0) or 0) >= 75 else None
+        except (TypeError, ValueError):
+            return None
 
 # PostgreSQL is the cloud persistence layer. The JSON fallback keeps the app
 # usable locally when DATABASE_URL is not configured.
@@ -456,12 +471,7 @@ HTML = """
         {% if instagram_pending %}
             {% for item in instagram_pending %}
         <div class="card">
-            <div class="score">{{ item.best_score }}/100</div>
-            <div class="meta"><strong>{% if item.suggested_comment %}LIKE + COMMENT{% else %}LIKE{% endif %}</strong></div>
-            <div class="meta">
-                Buyer: {{ item.buyer_score }} ({{ item.buyer_band.replace('_', ' ') }}) ·
-                Follower: {{ item.follower_score }} ({{ item.follower_band.replace('_', ' ') }})
-            </div>
+            <div class="meta"><strong>{{ item.display_label }}</strong></div>
             <div class="meta">Category: {{ item.categories|join(', ') }}</div>
 
             {% if item.suggested_comment %}
@@ -1225,7 +1235,17 @@ def _scan_worker_key_ok(req):
 @login_required
 def index():
     pending = get_pending()
-    instagram_pending = [x for x in pending if str(x.get("platform", "INSTAGRAM")).upper() == "INSTAGRAM"]
+    instagram_pending = []
+    for item in pending:
+        platform = str(item.get("platform") or item.get("account_type") or "INSTAGRAM").upper()
+        if platform != "INSTAGRAM":
+            continue
+        label = instagram_card_label(item)
+        if not label:
+            continue
+        item["display_label"] = label
+        instagram_pending.append(item)
+
     youtube_pending = [x for x in pending if str(x.get("platform", "")).upper() == "YOUTUBE"]
     stats = load_stats()
     scan_status = _scan_status_for_client(DEFAULT_CLIENT_ID)
