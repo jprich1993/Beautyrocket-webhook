@@ -339,7 +339,13 @@ HTML = """
         color: #7d3543;
     }
     .platform-content { padding-top: 12px; }
-    .youtube-section { border-color: rgba(100, 87, 170, .32); }
+    .content-studio-section { border-color: rgba(121, 81, 168, .38); }
+    .content-studio-toggle { color: #67428e; }
+    .content-studio-toggle::after { color: #7951a8; }
+    .content-studio-section .platform-summary-count {
+        background: #eee5f8;
+        color: #67428e;
+    }    .youtube-section { border-color: rgba(100, 87, 170, .32); }
     .youtube-toggle { color: #40356f; }
     .youtube-toggle::after { color: #6255a4; }
     .youtube-section .platform-summary-count {
@@ -460,6 +466,20 @@ HTML = """
 
         Discover and review opportunities across supported platforms. AI suggestions require human review; you decide whether to engage, edit a suggestion, or skip. All engagement actions are completed manually by the user.
 
+    <details class="platform-section content-studio-section" aria-label="Content Studio drafts">
+        <summary class="platform-toggle content-studio-toggle">
+            <span>Content Studio</span>
+            <span class="platform-summary-count">{{ content_studio_pending }} pending</span>
+        </summary>
+        <div class="platform-content">
+            <div class="queue-head">
+                <h2>My Hair Hobby Content Studio</h2>
+                <span class="pending-pill">{{ content_studio_pending }} pending</span>
+            </div>
+            <p>Review generated graphics, captions, and matched catalog product links.</p>
+            <p><a class="btn open" href="/content-studio">OPEN CONTENT STUDIO</a></p>
+        </div>
+    </details>
     <details class="platform-section" aria-label="Instagram engagement opportunities" open>
         <summary class="platform-toggle"><span>Instagram</span><span class="platform-summary-count">{{ instagram_pending|length }} pending</span></summary>
         <div class="platform-content">
@@ -1248,6 +1268,18 @@ def index():
         instagram_pending.append(item)
 
     youtube_pending = [x for x in pending if str(x.get("platform", "")).upper() == "YOUTUBE"]
+    content_studio_pending = 0
+    if DB_ENABLED:
+        try:
+            with _db_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT COUNT(*) AS total FROM {CONTENT_DRAFTS_TABLE} WHERE status = 'pending_review'"
+                    )
+                    count_row = cur.fetchone() or {}
+                    content_studio_pending = int(count_row.get("total", 0) or 0)
+        except Exception:
+            app.logger.exception("Could not load Content Studio pending count")
     stats = load_stats()
     scan_status = _scan_status_for_client(DEFAULT_CLIENT_ID)
     return render_template_string(
@@ -1255,6 +1287,7 @@ def index():
         pending=pending,
         instagram_pending=instagram_pending,
         youtube_pending=youtube_pending,
+        content_studio_pending=content_studio_pending,
 
         stats=stats,
         scan_status=scan_status,
