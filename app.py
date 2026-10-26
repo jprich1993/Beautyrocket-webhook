@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -98,7 +99,7 @@ LOGIN_HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beauty Rocket — Login</title>
+<title>Beauty Rocket â€” Login</title>
 <style>
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -198,7 +199,7 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beauty Rocket — Manual Review Dashboard V5.2</title>
+<title>Beauty Rocket â€” Manual Review Dashboard V5.2</title>
 <style>
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -428,7 +429,7 @@ HTML = """
     <header class="header">
         <h1 class="brand">Beauty Rocket</h1>
         <div class="title">COMMENT AND LIKE REVIEW</div>
-        <div class="tagline">DISCOVER · ENGAGE · GROW</div>
+        <div class="tagline">DISCOVER Â· ENGAGE Â· GROW</div>
     </header>
 
     <section class="production" aria-label="Production statistics">
@@ -451,7 +452,7 @@ HTML = """
     </section>
 
     <div class="review-warning">
-        <strong>⚠ HUMAN REVIEW REQUIRED — NO AUTOMATED INSTAGRAM ACTIONS</strong><br>
+        <strong>âš  HUMAN REVIEW REQUIRED â€” NO AUTOMATED INSTAGRAM ACTIONS</strong><br>
         Open the Reel and review the actual visual content before doing anything.
         AI scoring and suggested comments can be wrong or can match the category while missing what is actually shown in the Reel.
         <strong>Only copy the comment and post it yourself when it genuinely fits the visual.</strong>
@@ -475,35 +476,35 @@ HTML = """
             <div class="meta">Category: {{ item.categories|join(', ') }}</div>
 
             {% if item.suggested_comment %}
-            <div class="comment-label">AI SUGGESTED COMMENT — EDIT OPTIONAL</div>
+            <div class="comment-label">AI SUGGESTED COMMENT â€” EDIT OPTIONAL</div>
             <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested comment">{{ item.suggested_comment }}</textarea>
             <div class="edit-row">
                 <form method="post" action="/edit-comment/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="comment" id="save-comment-{{ item.queue_id }}">
-                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">💾 SAVE EDIT</button>
+                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">ðŸ’¾ SAVE EDIT</button>
                 </form>
                 <span class="edit-note">Leave it unchanged if the AI suggestion already fits.</span>
             </div>
             {% else %}
-            <div class="comment-label">NO AI COMMENT AVAILABLE — USER MAY WRITE THEIR OWN</div>
+            <div class="comment-label">NO AI COMMENT AVAILABLE â€” USER MAY WRITE THEIR OWN</div>
             {% endif %}
 
             <div class="buttons">
-                {% if item.suggested_comment %}<button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">📋 COPY AI COMMENT</button>{% endif %}
-                <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">🎬 OPEN REEL</a>
+                {% if item.suggested_comment %}<button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">ðŸ“‹ COPY AI COMMENT</button>{% endif %}
+                <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">ðŸŽ¬ OPEN REEL</a>
                 <form method="post" action="/done/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button class="done" type="submit">✓ DONE — ENGAGEMENT HANDLED</button>
+                    <button class="done" type="submit">âœ“ DONE â€” ENGAGEMENT HANDLED</button>
                 </form>
                 <form method="post" action="/skip/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button class="skip" type="submit">SKIP — NOT USING</button>
+                    <button class="skip" type="submit">SKIP â€” NOT USING</button>
                 </form>
             </div>
 
             {% if item.caption %}
-            <div class="caption">{{ item.caption[:300] }}{% if item.caption|length > 300 %}…{% endif %}</div>
+            <div class="caption">{{ item.caption[:300] }}{% if item.caption|length > 300 %}â€¦{% endif %}</div>
             {% endif %}
         </div>
         {% endfor %}
@@ -537,7 +538,7 @@ HTML = """
                 {% endif %}
 
                 {% if item.suggested_comment %}
-                <div class="comment-label">AI SUGGESTED COMMENT — EDIT OPTIONAL</div>
+                <div class="comment-label">AI SUGGESTED COMMENT â€” EDIT OPTIONAL</div>
                 <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested comment">{{ item.suggested_comment }}</textarea>
                 <div class="edit-row">
                     <form method="post" action="/edit-comment/{{ item.queue_id }}">
@@ -556,11 +557,11 @@ HTML = """
                     <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener noreferrer">{{ "OPEN VIDEO" if item.get("writer_source") == "YOUTUBE_AUDIENCE_GROWTH_V1" else "OPEN COMMENT" }}</a>
                     <form method="post" action="/done/{{ item.queue_id }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <button class="done" type="submit">DONE — ENGAGEMENT HANDLED</button>
+                        <button class="done" type="submit">DONE â€” ENGAGEMENT HANDLED</button>
                     </form>
                     <form method="post" action="/skip/{{ item.queue_id }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <button class="skip" type="submit">SKIP — NOT USING</button>
+                        <button class="skip" type="submit">SKIP â€” NOT USING</button>
                     </form>
                 </div>
             </div>
@@ -577,7 +578,7 @@ HTML = """
             <button class="refresh" type="submit">LOG OUT</button>
         </form>
     </div>
-    <div class="footer">BEAUTY ROCKET V5.2 — MANUAL REVIEW DASHBOARD</div>
+    <div class="footer">BEAUTY ROCKET V5.2 â€” MANUAL REVIEW DASHBOARD</div>
 </div>
 
 <script>
@@ -587,7 +588,7 @@ async function copyComment(id, button) {
     try {
         await navigator.clipboard.writeText(text);
         const old = button.innerText;
-        button.innerText = "✓ COPIED";
+        button.innerText = "âœ“ COPIED";
         setTimeout(() => button.innerText = old, 1400);
     } catch (e) {
         alert("Copy failed. Please long-press/select the comment manually.");
@@ -1614,6 +1615,244 @@ def skip(queue_id):
 
     set_queue_status(queue_id, "SKIPPED")
     return redirect(url_for("index"))
+
+
+
+
+# CONTENT_STUDIO_PATCH_V1: isolated human-review workflow.
+from urllib.parse import urlparse
+
+CONTENT_DRAFTS_TABLE = "beautyrocket_content_drafts"
+
+def init_content_drafts_db():
+    """Create only the dedicated content-draft table; preserve all existing tables."""
+    if not DB_ENABLED:
+        return
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {CONTENT_DRAFTS_TABLE} (
+                    draft_id TEXT PRIMARY KEY,
+                    batch_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    item_number INTEGER NOT NULL,
+                    topic TEXT NOT NULL,
+                    caption TEXT NOT NULL,
+                    media_url TEXT NOT NULL,
+                    product_url TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending_review',
+                    payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    created_at_utc TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    reviewed_at_utc TIMESTAMPTZ
+                )
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS
+                idx_beautyrocket_content_drafts_status_created
+                ON {CONTENT_DRAFTS_TABLE} (status, created_at_utc DESC)
+            """)
+        conn.commit()
+
+
+def _content_url_is_safe(value, kind):
+    value = str(value or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme != "https":
+        return False
+    if kind == "media":
+        return parsed.hostname == "res.cloudinary.com" and bool(parsed.path)
+    if kind == "product":
+        return (
+            parsed.hostname == "shop.saloninteractive.com"
+            and re.fullmatch(
+                r"/store/myhairhobby/product/[^/]+/[^/]+",
+                parsed.path or ""
+            ) is not None
+            and not parsed.query and not parsed.fragment
+        )
+    return False
+
+
+@app.post("/api/content-drafts/sync")
+def api_content_drafts_sync():
+    """Receive generated drafts for review; never publishes to social platforms."""
+    if not BOT_API_KEY:
+        return jsonify({"ok": False, "error": "bot_api_not_configured"}), 503
+    supplied = request.headers.get("X-Beautyrocket-Bot-Key", "")
+    if not supplied or not hmac.compare_digest(supplied, BOT_API_KEY):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not DB_ENABLED:
+        return jsonify({"ok": False, "error": "database_not_configured"}), 503
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "application/json_required"}), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "json_object_required"}), 400
+    items = payload.get("items")
+    batch_id = str(payload.get("batch_id") or "").strip()
+    client_id = str(payload.get("client_id") or "").strip()
+    if not batch_id or not client_id or not isinstance(items, list) or not items:
+        return jsonify({"ok": False, "error": "batch_id_client_id_and_items_required"}), 400
+    if len(items) > 10:
+        return jsonify({"ok": False, "error": "too_many_items"}), 413
+
+    cleaned = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return jsonify({"ok": False, "error": "invalid_item"}), 400
+        draft_id = str(item.get("draft_id") or "").strip()
+        topic = str(item.get("topic") or "").strip()
+        caption = str(item.get("caption") or "").strip()
+        media_url = str(item.get("media_url") or "").strip()
+        product_url = str(item.get("product_url") or "").strip()
+        try:
+            item_number = int(item.get("item_number"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_item_number"}), 400
+
+        if (not draft_id or len(draft_id) > 200 or draft_id in seen
+                or not topic or not caption or item_number < 1
+                or not _content_url_is_safe(media_url, "media")):
+            return jsonify({"ok": False, "error": "invalid_or_unsafe_draft"}), 400
+        if product_url and not _content_url_is_safe(product_url, "product"):
+            return jsonify({"ok": False, "error": "invalid_product_url"}), 400
+        seen.add(draft_id)
+        cleaned.append({
+            "draft_id": draft_id,
+            "batch_id": batch_id,
+            "client_id": client_id,
+            "item_number": item_number,
+            "topic": topic[:500],
+            "caption": caption[:12000],
+            "media_url": media_url,
+            "product_url": product_url,
+            "payload": item,
+        })
+
+    inserted = 0
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            for item in cleaned:
+                cur.execute(f"""
+                    INSERT INTO {CONTENT_DRAFTS_TABLE}
+                        (draft_id, batch_id, client_id, item_number, topic,
+                         caption, media_url, product_url, status, payload)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'pending_review',%s)
+                    ON CONFLICT (draft_id) DO NOTHING
+                """, (
+                    item["draft_id"], item["batch_id"], item["client_id"],
+                    item["item_number"], item["topic"], item["caption"],
+                    item["media_url"], item["product_url"],
+                    Jsonb(item["payload"]),
+                ))
+                inserted += cur.rowcount
+        conn.commit()
+
+    return jsonify({
+        "ok": True,
+        "received": len(cleaned),
+        "inserted": inserted,
+        "duplicates_ignored": len(cleaned) - inserted,
+        "publishing": "disabled",
+    })
+
+
+@app.get("/content-studio")
+@login_required
+def content_studio():
+    drafts = []
+    if DB_ENABLED:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT draft_id, batch_id, client_id, item_number, topic,
+                           caption, media_url, product_url, status, created_at_utc
+                    FROM {CONTENT_DRAFTS_TABLE}
+                    ORDER BY created_at_utc DESC
+                    LIMIT 100
+                """)
+                drafts = [dict(row) for row in cur.fetchall()]
+
+    return render_template_string(r"""
+    <!doctype html>
+    <html lang="en"><head>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>My Hair Hobby Content Studio</title>
+      <style>
+        body{font:16px Arial,sans-serif;background:#f8eee6;color:#26333b;margin:0;padding:20px}
+        main{max-width:1050px;margin:auto}
+        .top,.draft{background:#fff;border-radius:16px;padding:18px;margin:14px 0}
+        .draft{display:grid;grid-template-columns:minmax(220px,360px) 1fr;gap:18px}
+        img{width:100%;height:auto;border-radius:10px}
+        .caption{white-space:pre-wrap;overflow-wrap:anywhere}
+        a{color:#8b3d51}
+        button{border:0;border-radius:9px;padding:10px 14px;margin:5px 6px 0 0;cursor:pointer}
+        .approve{background:#d8efdf}.reject{background:#f5d8d8}
+        .status{font-weight:bold;text-transform:uppercase;font-size:12px}
+        @media(max-width:700px){.draft{grid-template-columns:1fr}}
+      </style></head><body><main>
+      <div class="top">
+        <h1>My Hair Hobby Content Studio</h1>
+        <p>Review captions and graphics before manual publishing. Approval does not publish content.</p>
+        <p><a href="/">Return to main dashboard</a></p>
+        {% if not database_enabled %}<p>Database is not configured; drafts cannot be displayed.</p>{% endif %}
+      </div>
+      {% for d in drafts %}
+      <article class="draft">
+        <div><img src="{{ d.media_url }}" alt="Draft graphic preview" loading="lazy"></div>
+        <div>
+          <h2>{{ d.item_number }}. {{ d.topic }}</h2>
+          <p class="status">Status: {{ d.status }}</p>
+          <p class="caption">{{ d.caption }}</p>
+          {% if d.product_url %}<p><a href="{{ d.product_url }}" target="_blank" rel="noopener">View matched product</a></p>{% endif %}
+          <p><small>Batch: {{ d.batch_id }} Â· Client: {{ d.client_id }}</small></p>
+          {% if d.status == 'pending_review' %}
+          <form method="post" action="/content-studio/{{ d.draft_id }}/approve" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="approve" type="submit">Approve for manual publishing</button>
+          </form>
+          <form method="post" action="/content-studio/{{ d.draft_id }}/reject" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="reject" type="submit">Reject</button>
+          </form>
+          {% endif %}
+        </div>
+      </article>
+      {% else %}
+      <div class="top"><p>No content drafts have been submitted yet.</p></div>
+      {% endfor %}
+    </main></body></html>
+    """, drafts=drafts, csrf_token=session["csrf_token"], database_enabled=DB_ENABLED)
+
+
+@app.post("/content-studio/<draft_id>/<action>")
+@login_required
+def content_studio_review(draft_id, action):
+    if action not in {"approve", "reject"}:
+        return ("Invalid review action.", 400)
+    if not valid_csrf(request.form.get("csrf_token")):
+        return ("Invalid request.", 400)
+    if not DB_ENABLED:
+        return ("Database is not configured.", 503)
+
+    status = "approved_for_manual_publishing" if action == "approve" else "rejected"
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE {CONTENT_DRAFTS_TABLE}
+                SET status=%s, reviewed_at_utc=NOW()
+                WHERE draft_id=%s AND status='pending_review'
+            """, (status, draft_id))
+            changed = cur.rowcount
+        conn.commit()
+    if not changed:
+        return ("Draft not found or already reviewed.", 404)
+    return redirect(url_for("content_studio"))
+
+
+init_content_drafts_db()
 
 
 if __name__ == "__main__":
