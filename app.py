@@ -466,11 +466,11 @@ HTML = """
 
         Discover and review opportunities across supported platforms. AI suggestions require human review; you decide whether to engage, edit a suggestion, or skip. All engagement actions are completed manually by the user.
 
-    <details class="platform-section content-studio-section" aria-label="Content Studio drafts">
-        <summary class="platform-toggle content-studio-toggle">
+    <section class="platform-section content-studio-section" aria-label="Content Studio">
+        <div class="platform-toggle content-studio-toggle">
             <span>Content Studio</span>
             <span class="platform-summary-count">{{ content_studio_pending }} pending</span>
-        </summary>
+        </div>
         <div class="platform-content">
             <div class="queue-head">
                 <h2>My Hair Hobby Content Studio</h2>
@@ -479,7 +479,7 @@ HTML = """
             <p>Review generated graphics, captions, and matched catalog product links.</p>
             <p><a class="btn open" href="/content-studio">OPEN CONTENT STUDIO</a></p>
         </div>
-    </details>
+    </section>
     <details class="platform-section" aria-label="Instagram engagement opportunities" open>
         <summary class="platform-toggle"><span>Instagram</span><span class="platform-summary-count">{{ instagram_pending|length }} pending</span></summary>
         <div class="platform-content">
@@ -1803,6 +1803,7 @@ def content_studio():
                     SELECT draft_id, batch_id, client_id, item_number, topic,
                            caption, media_url, product_url, status, created_at_utc
                     FROM {CONTENT_DRAFTS_TABLE}
+                    WHERE status = 'pending_review'
                     ORDER BY created_at_utc DESC
                     LIMIT 100
                 """)
@@ -1823,6 +1824,9 @@ def content_studio():
         a{color:#8b3d51}
         button{border:0;border-radius:9px;padding:10px 14px;margin:5px 6px 0 0;cursor:pointer}
         .approve{background:#d8efdf}.reject{background:#f5d8d8}
+        .actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+        .actions form{display:inline}
+        button{min-height:44px;font-size:15px;touch-action:manipulation}
         .status{font-weight:bold;text-transform:uppercase;font-size:12px}
         @media(max-width:700px){.draft{grid-template-columns:1fr}}
       </style></head><body><main>
@@ -1841,36 +1845,91 @@ def content_studio():
           <p class="caption">{{ d.caption }}</p>
           {% if d.product_url %}<p><a href="{{ d.product_url }}" target="_blank" rel="noopener">View matched product</a></p>{% endif %}
           <p><small>Batch: {{ d.batch_id }} Â· Client: {{ d.client_id }}</small></p>
-          {% if d.status == 'pending_review' %}
-          <form method="post" action="/content-studio/{{ d.draft_id }}/approve" style="display:inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="approve" type="submit">Approve for manual publishing</button>
-          </form>
-          <form method="post" action="/content-studio/{{ d.draft_id }}/reject" style="display:inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="reject" type="submit">Reject</button>
-          </form>
-          {% endif %}
+          <div class="actions">
+            <button type="button" onclick="copyCaption(this)">Copy Caption</button>
+            <button type="button" onclick="copyPicture(this)">Save / Copy Image</button>
+            <form method="post" action="/content-studio/{{ d.draft_id }}/posted">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="approve" type="submit"
+                onclick="return confirm('Confirm this post has been published?')">Mark as Posted</button>
+            </form>
+            <form method="post" action="/content-studio/{{ d.draft_id }}/skip">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="reject" type="submit"
+                onclick="return confirm('Skip this draft and remove it from the active queue?')">Skip</button>
+            </form>
+          </div>
         </div>
       </article>
       {% else %}
       <div class="top"><p>No content drafts have been submitted yet.</p></div>
       {% endfor %}
-    </main></body></html>
+    </main>
+    <script>
+      async function copyCaption(button) {
+        const card = button.closest(".draft");
+        const caption = card.querySelector(".caption").innerText;
+        try {
+          await navigator.clipboard.writeText(caption);
+          button.textContent = "Caption Copied!";
+        } catch (error) {
+          const area = document.createElement("textarea");
+          area.value = caption;
+          document.body.appendChild(area);
+          area.select();
+          const ok = document.execCommand("copy");
+          area.remove();
+          button.textContent = ok ? "Caption Copied!" : "Copy failed";
+        }
+      }
+
+      function imageUrl(button) {
+        return button.closest(".draft").querySelector("img").src;
+      }
+
+      function saveImage(button) {
+        // Opens the hosted graphic. On iPhone, long-press the image and
+        // choose Save to Photos / Save Image when offered.
+        window.open(imageUrl(button), "_blank", "noopener");
+      }
+
+      async function copyPicture(button) {
+        const url = imageUrl(button);
+        try {
+          if (!navigator.clipboard || !window.ClipboardItem) {
+            throw new Error("Image clipboard unavailable");
+          }
+          const response = await fetch(url, {mode: "cors"});
+          if (!response.ok) throw new Error("Image could not be fetched");
+          const blob = await response.blob();
+          if (!blob.type.startsWith("image/")) {
+            throw new Error("URL did not return an image");
+          }
+          await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
+          button.textContent = "Picture Copied!";
+        } catch (error) {
+          button.textContent = "Opening Image?";
+          window.open(url, "_blank", "noopener");
+          alert("Direct image copying is not supported here. The image was opened instead; on iPhone, press and hold it and choose Save Image.");
+        }
+      }
+    </script>
+    </body></html>
     """, drafts=drafts, csrf_token=session["csrf_token"], database_enabled=DB_ENABLED)
 
 
 @app.post("/content-studio/<draft_id>/<action>")
 @login_required
 def content_studio_review(draft_id, action):
-    if action not in {"approve", "reject"}:
+    statuses = {"posted": "posted", "skip": "skipped"}
+    if action not in statuses:
         return ("Invalid review action.", 400)
     if not valid_csrf(request.form.get("csrf_token")):
         return ("Invalid request.", 400)
     if not DB_ENABLED:
         return ("Database is not configured.", 503)
 
-    status = "approved_for_manual_publishing" if action == "approve" else "rejected"
+    status = statuses[action]
     with _db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
@@ -1881,7 +1940,7 @@ def content_studio_review(draft_id, action):
             changed = cur.rowcount
         conn.commit()
     if not changed:
-        return ("Draft not found or already reviewed.", 404)
+        return ("Draft not found or already handled.", 404)
     return redirect(url_for("content_studio"))
 
 
