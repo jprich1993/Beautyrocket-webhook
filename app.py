@@ -1844,7 +1844,6 @@ def content_studio():
           <p class="status">Status: {{ d.status }}</p>
           <p class="caption">{{ d.caption }}</p>
           {% if d.product_url %}<p><a href="{{ d.product_url }}" target="_blank" rel="noopener">View matched product</a></p>{% endif %}
-          <p><small>Batch: {{ d.batch_id }} Â· Client: {{ d.client_id }}</small></p>
           <div class="actions">
             <button type="button" onclick="copyCaption(this)">Copy Caption</button>
             <button type="button" onclick="copyPicture(this)">Save / Copy Image</button>
