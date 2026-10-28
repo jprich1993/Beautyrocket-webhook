@@ -1840,7 +1840,7 @@ def content_studio():
       <article class="draft">
         <div><img src="{{ d.media_url }}" alt="Draft graphic preview" loading="lazy"></div>
         <div>
-          <h2>{{ d.item_number }}. {{ d.topic }}</h2>
+          <h2>{{ d.topic }}</h2>
           <p class="status">Status: {{ d.status }}</p>
           <p class="caption">{{ d.caption }}</p>
           {% if d.product_url %}<p><a href="{{ d.product_url }}" target="_blank" rel="noopener">View matched product</a></p>{% endif %}
