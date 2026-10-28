@@ -99,7 +99,7 @@ LOGIN_HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beauty Rocket â€” Login</title>
+<title>Beauty Rocket - Login</title>
 <style>
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -199,7 +199,7 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f8e9df">
-<title>Beauty Rocket â€” Manual Review Dashboard V5.2</title>
+<title>Beauty Rocket - Manual Review Dashboard V5.2</title>
 <style>
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -458,7 +458,7 @@ HTML = """
     </section>
 
     <div class="review-warning">
-        <strong>âš  HUMAN REVIEW REQUIRED â€” NO AUTOMATED INSTAGRAM ACTIONS</strong><br>
+        <strong>HUMAN REVIEW REQUIRED - NO AUTOMATED INSTAGRAM ACTIONS</strong><br>
         Open the Reel and review the actual visual content before doing anything.
         AI scoring and suggested comments can be wrong or can match the category while missing what is actually shown in the Reel.
         <strong>Only copy the comment and post it yourself when it genuinely fits the visual.</strong>
@@ -496,7 +496,7 @@ HTML = """
             <div class="meta">Category: {{ item.categories|join(', ') }}</div>
 
             {% if item.suggested_comment %}
-            <div class="comment-label">AI SUGGESTED COMMENT â€” EDIT OPTIONAL</div>
+            <div class="comment-label">AI SUGGESTED COMMENT - EDIT OPTIONAL</div>
             <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested comment">{{ item.suggested_comment }}</textarea>
             <div class="edit-row">
                 <form method="post" action="/edit-comment/{{ item.queue_id }}">
@@ -507,7 +507,7 @@ HTML = """
                 <span class="edit-note">Leave it unchanged if the AI suggestion already fits.</span>
             </div>
             {% else %}
-            <div class="comment-label">NO AI COMMENT AVAILABLE â€” USER MAY WRITE THEIR OWN</div>
+            <div class="comment-label">NO AI COMMENT AVAILABLE - USER MAY WRITE THEIR OWN</div>
             {% endif %}
 
             <div class="buttons">
@@ -515,11 +515,11 @@ HTML = """
                 <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">ðŸŽ¬ OPEN REEL</a>
                 <form method="post" action="/done/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button class="done" type="submit">âœ“ DONE â€” ENGAGEMENT HANDLED</button>
+                    <button class="done" type="submit">DONE - ENGAGEMENT HANDLED</button>
                 </form>
                 <form method="post" action="/skip/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button class="skip" type="submit">SKIP â€” NOT USING</button>
+                    <button class="skip" type="submit">SKIP - NOT USING</button>
                 </form>
             </div>
 
@@ -558,7 +558,7 @@ HTML = """
                 {% endif %}
 
                 {% if item.suggested_comment %}
-                <div class="comment-label">AI SUGGESTED COMMENT â€” EDIT OPTIONAL</div>
+                <div class="comment-label">AI SUGGESTED COMMENT - EDIT OPTIONAL</div>
                 <textarea class="comment-editor" id="comment-{{ item.queue_id }}" aria-label="Editable AI suggested comment">{{ item.suggested_comment }}</textarea>
                 <div class="edit-row">
                     <form method="post" action="/edit-comment/{{ item.queue_id }}">
@@ -577,11 +577,11 @@ HTML = """
                     <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener noreferrer">{{ "OPEN VIDEO" if item.get("writer_source") == "YOUTUBE_AUDIENCE_GROWTH_V1" else "OPEN COMMENT" }}</a>
                     <form method="post" action="/done/{{ item.queue_id }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <button class="done" type="submit">DONE â€” ENGAGEMENT HANDLED</button>
+                        <button class="done" type="submit">DONE - ENGAGEMENT HANDLED</button>
                     </form>
                     <form method="post" action="/skip/{{ item.queue_id }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <button class="skip" type="submit">SKIP â€” NOT USING</button>
+                        <button class="skip" type="submit">SKIP - NOT USING</button>
                     </form>
                 </div>
             </div>
@@ -598,7 +598,7 @@ HTML = """
             <button class="refresh" type="submit">LOG OUT</button>
         </form>
     </div>
-    <div class="footer">BEAUTY ROCKET V5.2 â€” MANUAL REVIEW DASHBOARD</div>
+    <div class="footer">BEAUTY ROCKET V5.2 - MANUAL REVIEW DASHBOARD</div>
 </div>
 
 <script>
@@ -608,7 +608,7 @@ async function copyComment(id, button) {
     try {
         await navigator.clipboard.writeText(text);
         const old = button.innerText;
-        button.innerText = "âœ“ COPIED";
+        button.innerText = "COPIED";
         setTimeout(() => button.innerText = old, 1400);
     } catch (e) {
         alert("Copy failed. Please long-press/select the comment manually.");
