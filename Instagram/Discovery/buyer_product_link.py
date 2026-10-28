@@ -1,4 +1,4 @@
-﻿"""Conservative Buyer qualification based on a verified catalog URL in the comment."""
+"""Conservative Buyer qualification based on a verified catalog URL in the comment."""
 import importlib.util
 import re
 from functools import lru_cache
@@ -58,15 +58,9 @@ def comment_has_verified_product_link(comment, products=None):
         for p in products:
             if _url(p.get("product_url", "")) == url:
                 return True
-        # Allow a related/close catalog product slug, but not arbitrary external links.
-        slug_tokens = _tokens(urlparse(url).path.rsplit("/", 1)[-1])
-        for p in products:
-            name_tokens = _tokens(p.get("product_name", ""))
-            if name_tokens and len(slug_tokens & name_tokens) / len(name_tokens) >= 0.60:
-                return True
     return False
 
-def instagram_card_label(item):
+def instagram_card_label(item, products=None):
     try:
         buyer = int(item.get("buyer_score", 0) or 0)
     except (TypeError, ValueError):
@@ -75,7 +69,7 @@ def instagram_card_label(item):
         follower = int(item.get("follower_score", 0) or 0)
     except (TypeError, ValueError):
         follower = 0
-    if buyer >= 75 and comment_has_verified_product_link(item.get("suggested_comment", "")):
+    if buyer >= 60 and comment_has_verified_product_link(item.get("suggested_comment", ""), products):
         return "Potential Buyer"
     if follower >= 75:
         return "Engagement"

@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import csv
 import json
@@ -18,6 +18,30 @@ from collections import Counter, defaultdict
 import requests
 from dotenv import load_dotenv
 from buyer_product_link import comment_has_verified_product_link
+
+# Catalog candidates are read-only; recommendations must use verified URLs.
+import importlib.util
+from pathlib import Path
+
+def _load_buyer_catalog_candidates(lead_text, limit=5):
+    matcher_path = Path(__file__).resolve().parents[2] / 'ProductCatalog' / 'product_matcher_v1_1.py'
+    if not matcher_path.exists():
+        return []
+    spec = importlib.util.spec_from_file_location('beautyrocket_buyer_matcher', matcher_path)
+    if not spec or not spec.loader:
+        return []
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        _, products = module.load_latest_catalog()
+        candidates = module.shortlist_products(lead_text, products, limit=limit)
+    except Exception:
+        return []
+    return [
+        item for item in candidates
+        if item.get('catalog_verified_url') is True
+        and str(item.get('product_url', '')).startswith('https://shop.saloninteractive.com/store/myhairhobby/product/')
+    ]
 
 load_dotenv()
 
@@ -120,6 +144,8 @@ COMMENT_REVIEW_LIMIT = 100
 # V4.5: comments are suggestions only. They are never posted by Beautyrocket.
 COMMENT_QUEUE_FILE = "beautyrocket_comment_queue.json"
 COMMENT_QUEUE_MIN_SCORE = 75
+BUYER_COMMENT_MIN_SCORE = 60
+FOLLOWER_COMMENT_MIN_SCORE = 75
 
 # V4.5 production dashboard statistics. This persists across script runs.
 PRODUCTION_STATS_FILE = "beautyrocket_production_stats.json"
@@ -144,11 +170,22 @@ AI_COMMENT_LOG_FILE = "beautyrocket_ai_comment_log.csv"
 CATEGORY_WEIGHTS = {
     "beauty": 20,
     "hair": 24,
-    "fashion": 18,
-    "lifestyle": 15,
-    "motherhood": 10,
-    "womanhood": 8,
-    "humor": 5,
+    "hair_care": 24,
+    "hair_products": 24,
+    "hair_growth_health": 24,
+    "hair_problems_solutions": 24,
+    "hair_extensions": 24,
+    "curly_natural_hair": 22,
+    "hair_tutorials_tips": 22,
+    "beauty_products_reviews": 20,
+    "skincare_help": 18,
+    "beauty_tips": 16,
+    "beauty_problem_solution": 16,
+    "fashion": 8,
+    "lifestyle": 2,
+    "motherhood": 1,
+    "womanhood": 2,
+    "humor": 4,
 }
 
 # V4.3.27 audience-specific category signals. These are deliberately kept
@@ -774,7 +811,9 @@ def get_recent_hashtag_media(hashtag_id):
 def detect_categories(caption, hashtags):
     text = normalize_text(f"{caption or ''} {' '.join(hashtags or [])}")
     categories = set()
+    tags = {normalize_text(tag).lstrip("#") for tag in (hashtags or [])}
 
+    # Preserve broad labels for existing scoring and comment-generation code.
     if any(phrase_present(text, p) for p in [
         "beauty", "makeup", "skincare", "skin care", "cosmetic",
         "glam", "foundation", "concealer", "mascara"
@@ -787,66 +826,100 @@ def detect_categories(caption, hashtags):
     ]):
         categories.add("hair")
 
-    if any(phrase_present(text, p) for p in [
-        "fashion", "outfit", "ootd", "dress", "shoes", "jeans",
-        "handbag", "purse", "jewelry", "wardrobe", "style"
-    ]):
-        categories.add("fashion")
+    tag_categories = {
+        "haircare": {"hair_care"},
+        "hairproducts": {"hair_products"},
+        "hairgrowth": {"hair_growth_health"},
+        "healthyhair": {"hair_growth_health"},
+        "hairproblems": {"hair_problems_solutions", "beauty_problem_solution"},
+        "hairtips": {"hair_tutorials_tips"},
+        "curlyhair": {"curly_natural_hair"},
+        "naturalhair": {"curly_natural_hair"},
+        "hairextensions": {"hair_extensions"},
+        "hairtutorial": {"hair_tutorials_tips"},
+        "beautyreview": {"beauty_products_reviews"},
+        "beautyproducts": {"beauty_products_reviews"},
+        "skincarehelp": {"skincare_help", "beauty_problem_solution"},
+        "beautytips": {"beauty_tips"},
+    }
 
-    if any(phrase_present(text, p) for p in [
-        "lifestyle", "routine", "self care", "self-care", "home",
-        "daily life", "day in my life", "grwm"
-    ]):
-        categories.add("lifestyle")
+    for tag, matched_categories in tag_categories.items():
+        if tag in tags:
+            categories.update(matched_categories)
 
-    if any(phrase_present(text, p) for p in [
-        "motherhood", "momlife", "mom life", "mama", "mom",
-        "mother", "kids", "children", "raising kids"
-    ]):
-        categories.add("motherhood")
+    caption_rules = {
+        "hair_care": [
+            "hair care", "haircare", "hair routine", "scalp care", "hair wash day"
+        ],
+        "hair_products": [
+            "hair product", "hair products", "shampoo", "conditioner",
+            "leave-in", "leave in conditioner", "styling product"
+        ],
+        "hair_growth_health": [
+            "hair growth", "healthy hair", "hair retention",
+            "length retention", "thinning hair"
+        ],
+        "hair_problems_solutions": [
+            "hair problem", "hair problems", "hair damage", "damaged hair",
+            "breakage", "split ends", "dry scalp", "itchy scalp",
+            "oily scalp", "frizz", "frizzy", "hair loss"
+        ],
+        "hair_extensions": [
+            "hair extension", "hair extensions", "clip in extensions",
+            "clip-in extensions", "sew in", "sew-in", "tape in extensions"
+        ],
+        "curly_natural_hair": [
+            "curly hair", "natural hair", "coil pattern", "curl pattern"
+        ],
+        "hair_tutorials_tips": [
+            "hair tutorial", "hair tips", "how to style hair",
+            "hairstyle tutorial", "braid tutorial"
+        ],
+        "beauty_products_reviews": [
+            "beauty review", "product review", "beauty products",
+            "reviewing this product", "worth buying", "is it worth it"
+        ],
+        "skincare_help": [
+            "skincare help", "skin care help", "skin routine",
+            "skin concern", "skin concerns", "breakouts", "dark spots",
+            "sensitive skin", "oily skin", "dry skin"
+        ],
+        "beauty_tips": [
+            "beauty tips", "makeup tips", "beauty tutorial",
+            "makeup tutorial", "beauty advice"
+        ],
+    }
 
-    if any(phrase_present(text, p) for p in [
-        "womanhood", "women", "woman", "feminine",
-        "femininity", "girls"
-    ]):
-        categories.add("womanhood")
+    for category, phrases in caption_rules.items():
+        if any(phrase_present(text, phrase) for phrase in phrases):
+            categories.add(category)
 
-    if any(phrase_present(text, p) for p in [
-        "funny", "humor", "humour", "comedy", "lol",
-        "laugh", "ðŸ˜‚", "ðŸ¤£"
-    ]):
-        categories.add("humor")
-
-    # V4.3.27: buyer-focused category for people actively describing a
-    # beauty/hair/skin/style problem or looking for a practical solution.
     if any(phrase_present(text, p) for p in BEAUTY_PROBLEM_SOLUTION_PHRASES):
         categories.add("beauty_problem_solution")
 
-    # V4.3.27: follower-focused category for personality-led, relatable,
-    # storytime, opinion, rant, and everyday-human content.
     if any(phrase_present(text, p) for p in PERSONALITY_RELATABILITY_PHRASES):
         categories.add("personality_relatability")
 
-    for hashtag in hashtags or []:
-        tag = normalize_text(hashtag)
-        if tag in {"beauty", "beautytips", "beautyproducts"}:
-            categories.add("beauty")
-        elif tag in {"haircare", "hairproducts", "hairgrowth", "healthyhair", "curlyhair", "naturalhair", "hairextensions", "hairtutorial"}:
-            categories.add("hair")
-        elif tag in {"fashion", "womensfashion"}:
-            categories.add("fashion")
-        elif tag == "lifestyle":
-            categories.add("lifestyle")
-        elif tag in {"motherhood", "momlife"}:
-            categories.add("motherhood")
-        elif tag in {"women", "womanhood"}:
-            categories.add("womanhood")
-        elif tag in {"funnywomen", "womenshumor"}:
-            categories.add("humor")
-        elif tag in {"hairproblems", "hairproblem", "hairtips", "beautytips", "skincareproblems", "skincarehelp", "beautyreview"}:
-            categories.add("beauty_problem_solution")
-        elif tag in {"storytime", "storytimes", "hottake", "hottakes", "unpopularopinion", "relatable", "relatablewomen", "pov"}:
-            categories.add("personality_relatability")
+    # Retain legacy categories, with lower weights for unrelated topics.
+    legacy_rules = {
+        "fashion": [
+            "fashion", "outfit", "ootd", "dress", "shoes", "jeans",
+            "handbag", "purse", "jewelry", "wardrobe"
+        ],
+        "lifestyle": ["lifestyle", "daily life", "day in my life", "grwm"],
+        "motherhood": [
+            "motherhood", "momlife", "mom life", "mama", "mom",
+            "mother", "kids", "children", "raising kids"
+        ],
+        "womanhood": [
+            "womanhood", "women", "woman", "feminine", "femininity", "girls"
+        ],
+        "humor": ["funny", "humor", "humour", "comedy", "laugh"],
+    }
+
+    for category, phrases in legacy_rules.items():
+        if any(phrase_present(text, phrase) for phrase in phrases):
+            categories.add(category)
 
     return sorted(categories)
 
@@ -965,10 +1038,15 @@ def calculate_follower_opportunity(
         matches.append("unknown-conservative-base")
 
     # Audience overlap.
-    overlap = len(
-        set(categories)
-        & {"beauty", "hair", "fashion", "lifestyle", "motherhood", "womanhood", "humor"}
-    )
+    audience_categories = {
+        "beauty", "hair", "hair_care", "hair_products",
+        "hair_growth_health", "hair_problems_solutions",
+        "hair_extensions", "curly_natural_hair",
+        "hair_tutorials_tips", "beauty_products_reviews",
+        "skincare_help", "beauty_tips", "fashion",
+        "lifestyle", "motherhood", "womanhood", "humor",
+    }
+    overlap = len(set(categories) & audience_categories)
     score += min(overlap * 7, 28)
 
     if overlap:
@@ -1906,10 +1984,15 @@ def follower_action_decision(post):
     account_type = post.get("account_type")
     eligible_types = {"PERSONAL", "CREATOR", "INFLUENCER"}
     categories = set(post.get("categories", []))
-    overlap = len(
-        categories
-        & {"beauty", "hair", "fashion", "lifestyle", "motherhood", "womanhood", "humor"}
-    )
+    audience_categories = {
+        "beauty", "hair", "hair_care", "hair_products",
+        "hair_growth_health", "hair_problems_solutions",
+        "hair_extensions", "curly_natural_hair",
+        "hair_tutorials_tips", "beauty_products_reviews",
+        "skincare_help", "beauty_tips", "fashion",
+        "lifestyle", "motherhood", "womanhood", "humor",
+    }
+    overlap = len(set(categories) & audience_categories)
     matches = set(post.get("follower_matches", []))
     has_substantive = bool(
         {"substantive-caption", "developed-caption"} & matches
@@ -2068,7 +2151,16 @@ def validate_ai_comment(comment, post, existing_comments):
     # but an AI response ending on a plain alphanumeric character is especially
     # likely to have been truncated mid-thought. Emojis and normal punctuation
     # are accepted as natural endings.
-    last_char = comment.rstrip()[-1:]
+    # A verified product URL may end in an alphanumeric character.
+    # Check the sentence before a trailing URL instead of treating the
+    # URL's final character as evidence of a truncated comment.
+    trimmed_comment = comment.rstrip()
+    trailing_url_match = re.search(r"https?://\S+$", trimmed_comment, re.I)
+    ending_to_check = (
+        trimmed_comment[:trailing_url_match.start()].rstrip()
+        if trailing_url_match else trimmed_comment
+    )
+    last_char = ending_to_check[-1:] if ending_to_check else ""
     if last_char and last_char.isalnum():
         return False, "INCOMPLETE_THOUGHT"
 
@@ -2096,7 +2188,29 @@ def openai_generate_comment(post, state, existing_comments):
         return None, "NO_CAPTION"
 
     categories = ", ".join(post.get("categories", [])) or "general lifestyle"
-    target = post.get("target_decision", "BUYER_OR_FOLLOWER")
+    buyer_score = int(post.get("buyer_score", 0) or 0)
+    follower_score = int(post.get("follower_score", 0) or 0)
+    buyer_mode = buyer_score >= BUYER_COMMENT_MIN_SCORE
+    follower_mode = follower_score >= FOLLOWER_COMMENT_MIN_SCORE
+
+    # BUYER_MODE_CATALOG_CANDIDATES: use only verified catalog URLs.
+    catalog_candidates = []
+    if buyer_mode:
+        catalog_candidates = _load_buyer_catalog_candidates(
+            str(post.get("caption", "")) + " " + categories,
+            limit=5,
+        )
+        if not catalog_candidates:
+            if not follower_mode:
+                return None, "BUYER_NO_VERIFIED_PRODUCT_MATCH"
+            buyer_mode = False
+
+    target = (
+        "BUYER_AND_FOLLOWER" if buyer_mode and follower_mode
+        else "BUYER" if buyer_mode
+        else "FOLLOWER" if follower_mode
+        else "NONE"
+    )
     subject = extract_comment_subject(
         post.get("categories", []),
         post.get("product_matches", []),
@@ -2141,6 +2255,34 @@ def openai_generate_comment(post, state, existing_comments):
         "it sound inspirational, corporate, polished, or AI-generated. Finish the thought "
         "completely and do not end on a dangling phrase. Use emojis only when they genuinely fit."
     )
+
+    if buyer_mode:
+        product_lines = []
+        for item in catalog_candidates:
+            name = str(item.get("product_name", "")).strip()
+            url = str(item.get("product_url", "")).strip()
+            if name and url and item.get("catalog_verified_url") is True:
+                product_lines.append(f"- {name}: {url}")
+        if not product_lines:
+            if not follower_mode:
+                return None, "BUYER_NO_VERIFIED_PRODUCT_MATCH"
+            buyer_mode = False
+            target = "FOLLOWER"
+        else:
+            user_prompt += (
+                "\\n\\nBUYER COMMENT RULES: Keep the same natural, warm, expressive, "
+                "emotionally appropriate voice described above. Do not sound like an ad. "
+                "Briefly connect the caption's expressed need or interest to ONE relevant "
+                "product from this verified catalog list, and include that product's exact URL. "
+                "Do not invent product benefits or claim personal use. If none is genuinely "
+                "relevant, return exactly NO_SUITABLE_PRODUCT.\\nVerified catalog products:\\n"
+                + "\\n".join(product_lines)
+            )
+    else:
+        user_prompt += (
+            "\\n\\nFOLLOWER ENGAGEMENT RULES: Keep the existing emotional style. "
+            "Do not recommend products, sell, or include any link."
+        )
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -2194,9 +2336,18 @@ def openai_generate_comment(post, state, existing_comments):
                         pieces.append(content.get("text", ""))
             output_text = " ".join(pieces).strip()
 
+        if buyer_mode and str(output_text or "").strip() == "NO_SUITABLE_PRODUCT":
+            return None, "BUYER_NO_RELEVANT_PRODUCT"
+
         comment = clean_ai_comment(output_text)
         if not comment:
             return None, "AI_OUTPUT_INVALID"
+
+        if buyer_mode and not comment_has_verified_product_link(comment, catalog_candidates):
+            return None, "BUYER_COMMENT_MISSING_EXACT_VERIFIED_LINK"
+
+        if not buyer_mode and re.search(r"https?://", comment, re.I):
+            return None, "FOLLOWER_COMMENT_MUST_NOT_INCLUDE_LINK"
 
         valid, validation_reason = validate_ai_comment(
             comment,
@@ -2220,6 +2371,25 @@ def openai_generate_comment(post, state, existing_comments):
         return None, "OPENAI_RESPONSE_ERROR"
 
 
+def classify_review_target_decision(post, comment):
+    """Classify review rows using the existing qualification rules."""
+    buyer_score = int(post.get("buyer_score", 0) or 0)
+    follower_score = int(post.get("follower_score", 0) or 0)
+    buyer_qualified = (
+        buyer_score >= BUYER_COMMENT_MIN_SCORE
+        and comment_has_verified_product_link(comment or "")
+    )
+    follower_qualified = follower_score >= FOLLOWER_COMMENT_MIN_SCORE
+
+    if buyer_qualified and follower_qualified:
+        return "BUYER_AND_FOLLOWER"
+    if buyer_qualified:
+        return "BUYER"
+    if follower_qualified:
+        return "FOLLOWER"
+    return "NONE"
+
+
 def append_ai_comment_log(post, band, comment, source, reason=""):
     fields = [
         "timestamp_utc", "post_id", "permalink", "review_band", "target_decision",
@@ -2235,12 +2405,7 @@ def append_ai_comment_log(post, band, comment, source, reason=""):
             "post_id": post.get("id", ""),
             "permalink": post.get("permalink", ""),
             "review_band": band,
-            "target_decision": (
-                "BUYER_AND_FOLLOWER" if buyer_link_qualified and follower_qualified
-                else "BUYER" if buyer_link_qualified
-                else "FOLLOWER" if follower_qualified
-                else "NONE"
-            ),
+            "target_decision": classify_review_target_decision(post, comment),
             "buyer_score": post.get("buyer_score", ""),
             "follower_score": post.get("follower_score", ""),
             "source": source,
@@ -2285,7 +2450,7 @@ def run_comment_review_dataset(posts):
         follower_score = int(post.get("follower_score", 0) or 0)
         best_score = max(buyer_score, follower_score)
 
-        if best_score < COMMENT_QUEUE_MIN_SCORE:
+        if buyer_score < BUYER_COMMENT_MIN_SCORE and follower_score < FOLLOWER_COMMENT_MIN_SCORE:
             continue
 
         band = comment_review_band(post)
@@ -2334,10 +2499,26 @@ def run_comment_review_dataset(posts):
             source = "OPENAI"
         else:
             ai_fallbacks += 1
-            fallback = generate_unique_review_comment(
-                post,
-                generated_comments + comparison_memory,
+            buyer_score = int(post.get("buyer_score", 0) or 0)
+            follower_score = int(post.get("follower_score", 0) or 0)
+
+            # Buyer-only opportunities must never fall back to generic comments.
+            # If the follower threshold also qualifies, the local fallback may
+            # still serve as follower engagement, with no product link.
+            allow_local_fallback = (
+                buyer_score < BUYER_COMMENT_MIN_SCORE
+                or follower_score >= FOLLOWER_COMMENT_MIN_SCORE
             )
+            fallback = (
+                generate_unique_review_comment(
+                    post,
+                    generated_comments + comparison_memory,
+                )
+                if allow_local_fallback else None
+            )
+            if fallback and re.search(r"https?://", fallback, re.I):
+                fallback = None
+                source_reason = "LOCAL_FALLBACK_LINK_NOT_ALLOWED"
             if fallback:
                 fallback_valid, fallback_reason = validate_ai_comment(
                     fallback,
@@ -2363,12 +2544,7 @@ def run_comment_review_dataset(posts):
                 "follower_score": post.get("follower_score", ""),
                 "follower_band": post.get("follower_opportunity", ""),
                 "review_band": band,
-                "target_decision": (
-                "BUYER_AND_FOLLOWER" if buyer_link_qualified and follower_qualified
-                else "BUYER" if buyer_link_qualified
-                else "FOLLOWER" if follower_qualified
-                else "NONE"
-            ),
+                "target_decision": classify_review_target_decision(post, comment),
                 "account_type": post.get("account_type", ""),
                 "categories": ",".join(post.get("categories", [])),
                 "generated_comment": comment,
@@ -3302,10 +3478,10 @@ def main():
         ).strip()
 
         buyer_link_qualified = (
-            buyer_score >= COMMENT_QUEUE_MIN_SCORE
+            buyer_score >= BUYER_COMMENT_MIN_SCORE
             and comment_has_verified_product_link(comment_text)
         )
-        follower_qualified = follower_score >= COMMENT_QUEUE_MIN_SCORE
+        follower_qualified = follower_score >= FOLLOWER_COMMENT_MIN_SCORE
         like_opportunity = buyer_link_qualified or follower_qualified
         # Queue only opportunities that qualify as Potential Buyer or Engagement.
         # Comment quality alone must never admit a nonqualifying item.

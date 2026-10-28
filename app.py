@@ -435,7 +435,7 @@ HTML = """
     <header class="header">
         <h1 class="brand">Beauty Rocket</h1>
         <div class="title">COMMENT AND LIKE REVIEW</div>
-        <div class="tagline">DISCOVER Â· ENGAGE Â· GROW</div>
+        <div class="tagline">DISCOVER | ENGAGE | GROW</div>
     </header>
 
     <section class="production" aria-label="Production statistics">
@@ -502,7 +502,7 @@ HTML = """
                 <form method="post" action="/edit-comment/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="comment" id="save-comment-{{ item.queue_id }}">
-                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">ðŸ’¾ SAVE EDIT</button>
+                    <button class="save-edit" type="submit" onclick="document.getElementById('save-comment-{{ item.queue_id }}').value=document.getElementById('comment-{{ item.queue_id }}').value;">SAVE EDIT</button>
                 </form>
                 <span class="edit-note">Leave it unchanged if the AI suggestion already fits.</span>
             </div>
@@ -511,8 +511,8 @@ HTML = """
             {% endif %}
 
             <div class="buttons">
-                {% if item.suggested_comment %}<button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">ðŸ“‹ COPY AI COMMENT</button>{% endif %}
-                <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">ðŸŽ¬ OPEN REEL</a>
+                {% if item.suggested_comment %}<button class="copy" onclick="copyComment('comment-{{ item.queue_id }}', this)">COPY AI COMMENT</button>{% endif %}
+                <a class="btn open" href="{{ item.permalink }}" target="_blank" rel="noopener">OPEN REEL</a>
                 <form method="post" action="/done/{{ item.queue_id }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button class="done" type="submit">DONE - ENGAGEMENT HANDLED</button>
@@ -524,7 +524,7 @@ HTML = """
             </div>
 
             {% if item.caption %}
-            <div class="caption">{{ item.caption[:300] }}{% if item.caption|length > 300 %}â€¦{% endif %}</div>
+            <div class="caption">{{ item.caption[:300] }}{% if item.caption|length > 300 %}...{% endif %}</div>
             {% endif %}
         </div>
         {% endfor %}
