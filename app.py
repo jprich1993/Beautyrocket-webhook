@@ -1818,9 +1818,9 @@ def content_studio():
         body{font:16px Arial,sans-serif;background:#f8eee6;color:#26333b;margin:0;padding:20px}
         main{max-width:1050px;margin:auto}
         .top,.draft{background:#fff;border-radius:16px;padding:18px;margin:14px 0}
-        .draft{display:grid;grid-template-columns:minmax(220px,360px) 1fr;gap:18px}
+        .draft{display:grid;grid-template-columns:minmax(220px,360px) minmax(0,1fr);gap:18px;min-width:0}
         img{width:100%;height:auto;border-radius:10px}
-        .caption-editor{width:100%;min-height:150px;resize:vertical;border:1px solid #dfcfd0;border-radius:10px;padding:12px;font:inherit;line-height:1.5}
+        .caption-editor{display:block;box-sizing:border-box;width:100%;max-width:100%;min-width:0;min-height:150px;resize:vertical;overflow-x:hidden;border:1px solid #dfcfd0;border-radius:10px;padding:12px;font:inherit;line-height:1.5}
         .caption-help{font-size:12px;color:#6d6262;margin:6px 0}
         a{color:#8b3d51}
         button{border:0;border-radius:9px;padding:10px 14px;margin:5px 6px 0 0;cursor:pointer}
