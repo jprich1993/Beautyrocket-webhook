@@ -1820,7 +1820,8 @@ def content_studio():
         .top,.draft{background:#fff;border-radius:16px;padding:18px;margin:14px 0}
         .draft{display:grid;grid-template-columns:minmax(220px,360px) 1fr;gap:18px}
         img{width:100%;height:auto;border-radius:10px}
-        .caption{white-space:pre-wrap;overflow-wrap:anywhere}
+        .caption-editor{width:100%;min-height:150px;resize:vertical;border:1px solid #dfcfd0;border-radius:10px;padding:12px;font:inherit;line-height:1.5}
+        .caption-help{font-size:12px;color:#6d6262;margin:6px 0}
         a{color:#8b3d51}
         button{border:0;border-radius:9px;padding:10px 14px;margin:5px 6px 0 0;cursor:pointer}
         .approve{background:#d8efdf}.reject{background:#f5d8d8}
@@ -1842,10 +1843,17 @@ def content_studio():
         <div>
           <h2>{{ d.topic }}</h2>
           <p class="status">Status: {{ d.status }}</p>
-          <p class="caption">{{ d.caption }}</p>
+          <form method="post" action="/content-studio/{{ d.draft_id }}/edit-caption">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="caption-{{ d.draft_id }}"><strong>Universal caption</strong></label>
+            <textarea class="caption-editor" id="caption-{{ d.draft_id }}" name="caption" maxlength="12000" required>{{ d.caption }}</textarea>
+            <p class="caption-help">One caption for any platform. Edit it here, then save or copy it.</p>
+            <button type="submit">Save Caption</button>
+          </form>
           {% if d.product_url %}<p><a href="{{ d.product_url }}" target="_blank" rel="noopener">View matched product</a></p>{% endif %}
           <div class="actions">
             <button type="button" onclick="copyCaption(this)">Copy Caption</button>
+            {% if d.product_url %}<button type="button" data-product-url="{{ d.product_url }}" onclick="copyProductLink(this)">Copy Product Link</button>{% endif %}
             <button type="button" onclick="copyPicture(this)">Save / Copy Image</button>
             <form method="post" action="/content-studio/{{ d.draft_id }}/posted">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -1865,21 +1873,32 @@ def content_studio():
       {% endfor %}
     </main>
     <script>
-      async function copyCaption(button) {
-        const card = button.closest(".draft");
-        const caption = card.querySelector(".caption").innerText;
+      async function copyText(value, button, successLabel) {
         try {
-          await navigator.clipboard.writeText(caption);
-          button.textContent = "Caption Copied!";
+          await navigator.clipboard.writeText(value);
+          button.textContent = successLabel;
         } catch (error) {
           const area = document.createElement("textarea");
-          area.value = caption;
+          area.value = value;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.opacity = "0";
           document.body.appendChild(area);
           area.select();
           const ok = document.execCommand("copy");
           area.remove();
-          button.textContent = ok ? "Caption Copied!" : "Copy failed";
+          button.textContent = ok ? successLabel : "Copy failed";
         }
+      }
+
+      function copyCaption(button) {
+        const card = button.closest(".draft");
+        const caption = card.querySelector(".caption-editor").value;
+        copyText(caption, button, "Caption Copied!");
+      }
+
+      function copyProductLink(button) {
+        copyText(button.dataset.productUrl || "", button, "Product Link Copied!");
       }
 
       function imageUrl(button) {
@@ -1915,6 +1934,35 @@ def content_studio():
     </script>
     </body></html>
     """, drafts=drafts, csrf_token=session["csrf_token"], database_enabled=DB_ENABLED)
+
+
+@app.post("/content-studio/<draft_id>/edit-caption")
+@login_required
+def content_studio_edit_caption(draft_id):
+    """Save a user's edited universal caption without publishing the draft."""
+    if not valid_csrf(request.form.get("csrf_token")):
+        return ("Invalid request.", 400)
+    if not DB_ENABLED:
+        return ("Database is not configured.", 503)
+
+    caption = str(request.form.get("caption") or "").strip()
+    if not caption or len(caption) > 12000:
+        return ("Caption must contain between 1 and 12,000 characters.", 400)
+
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE {CONTENT_DRAFTS_TABLE}
+                SET caption=%s,
+                    payload=jsonb_set(payload, '{{caption}}', to_jsonb(%s::text), true)
+                WHERE draft_id=%s AND status='pending_review'
+            """, (caption, caption, draft_id))
+            changed = cur.rowcount
+        conn.commit()
+
+    if not changed:
+        return ("Draft not found or no longer pending review.", 404)
+    return redirect(url_for("content_studio"))
 
 
 @app.post("/content-studio/<draft_id>/<action>")
