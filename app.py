@@ -1571,7 +1571,7 @@ def tiktok_callback():
     if request.args.get("error"):
         return ("TikTok authorization was not completed.", 400)
 
-    auth_code = request.args.get("auth_code", "").strip()
+    auth_code = (request.args.get("auth_code") or request.args.get("code") or "").strip()
     redirect_uri = os.getenv("TIKTOK_REDIRECT_URI", "").strip()
 
     if not auth_code or not redirect_uri:
