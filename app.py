@@ -757,6 +757,19 @@ def init_db():
                 ON {EXECUTION_TABLE} (status, created_at_utc ASC)
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS beautyrocket_tiktok_oauth (
+                    account_key TEXT PRIMARY KEY DEFAULT 'primary',
+                    access_token_encrypted TEXT NOT NULL,
+                    refresh_token_encrypted TEXT NOT NULL,
+                    access_expires_at TIMESTAMPTZ NOT NULL,
+                    refresh_expires_at TIMESTAMPTZ NOT NULL,
+                    open_id TEXT,
+                    granted_scope TEXT,
+                    last_refreshed_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
         conn.commit()
 
 
@@ -1499,6 +1512,96 @@ def edit_comment(queue_id):
                 item["suggested_comment"] = comment; item["dashboard_edited_comment"] = comment; save_queue(queue); break
     return redirect(url_for("index"))
 
+
+@app.get("/tiktok/authorize")
+@login_required
+def tiktok_authorize():
+    """Start TikTok account-holder authorization."""
+    from urllib.parse import urlencode
+
+    app_id = os.getenv("TIKTOK_APP_ID", "").strip()
+    redirect_uri = os.getenv("TIKTOK_REDIRECT_URI", "").strip()
+    scopes = os.getenv(
+        "TIKTOK_SCOPES",
+        "biz.brand.insights,comment.list"
+    ).strip()
+
+    if not DB_ENABLED:
+        return ("Database is not configured.", 503)
+
+    if not app_id or not redirect_uri:
+        return ("TikTok authorization configuration is incomplete.", 503)
+
+    state = secrets.token_urlsafe(32)
+    session["tiktok_oauth_state"] = state
+
+    authorization_url = (
+        "https://www.tiktok.com/v2/auth/authorize?"
+        + urlencode({
+            "client_key": app_id,
+            "scope": scopes,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "state": state,
+        })
+    )
+
+    return redirect(authorization_url)
+
+
+@app.get("/tiktok/callback")
+def tiktok_callback():
+    """Validate OAuth state, exchange the code, and persist tokens."""
+    from TikTok.tiktok_oauth import (
+        TikTokOAuthError,
+        exchange_authorization_code,
+        save_token_bundle,
+    )
+
+    expected_state = session.pop("tiktok_oauth_state", None)
+    received_state = request.args.get("state", "")
+
+    if (
+        not expected_state
+        or not received_state
+        or not secrets.compare_digest(expected_state, received_state)
+    ):
+        return ("Invalid or expired TikTok authorization state.", 400)
+
+    if request.args.get("error"):
+        return ("TikTok authorization was not completed.", 400)
+
+    auth_code = request.args.get("auth_code", "").strip()
+    redirect_uri = os.getenv("TIKTOK_REDIRECT_URI", "").strip()
+
+    if not auth_code or not redirect_uri:
+        return ("TikTok authorization response is incomplete.", 400)
+
+    if not DB_ENABLED:
+        return ("Database is not configured.", 503)
+
+    try:
+        tokens = exchange_authorization_code(auth_code, redirect_uri)
+
+        with _db_connect() as conn:
+            save_token_bundle(conn, tokens)
+
+    except TikTokOAuthError:
+        app.logger.exception("TikTok OAuth token exchange failed.")
+        return (
+            "TikTok authorization could not be completed. "
+            "Check the server logs for the error details.",
+            502,
+        )
+    except Exception:
+        app.logger.exception("TikTok OAuth persistence failed.")
+        return ("TikTok credentials could not be saved.", 500)
+
+    return (
+        "TikTok account authorization succeeded. "
+        "Credentials were encrypted and saved.",
+        200,
+    )
 
 @app.get("/healthz")
 def healthz():
